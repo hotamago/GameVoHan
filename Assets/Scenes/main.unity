@@ -275,10 +275,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1a5c115fd1a7fd9479ac05fc4920556a, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerController
-  moveSpeed: 10
-  jumpForce: 5
+  moveSpeed: 100
+  jumpForce: 20
   lookSensitivity: 0.5
-  cameraDistance: 9.05
+  cameraDistance: 10
   minVerticalAngle: -80
   maxVerticalAngle: 80
 --- !u!1 &953848054
@@ -314,7 +314,7 @@ MonoBehaviour:
   chunkSize: 100
   renderDistance: 2
   seed: 0
-  floatingOriginThreshold: 500
+  floatingOriginThreshold: 100
   current_x: 0
   current_y: 0
   _debugLocalPos: {x: 0, y: 0, z: 0}

@@ -21,8 +21,6 @@ public class InfinityRenderChunks : MonoBehaviour
     [Header("Player Safety")]
     [SerializeField] private bool enableSafety = true;
     [SerializeField] private float safetyHeightOffset = 2.0f;
-    [SerializeField] private float fallThreshold = -10f; // Only reset if player falls below this
-    [SerializeField] private float maxFallDistance = 50f; // Max distance below terrain before reset
 
     [Header("Terrain Settings")]
     [SerializeField] private int resolution = 129; 
@@ -37,24 +35,6 @@ public class InfinityRenderChunks : MonoBehaviour
     [SerializeField] private float plainStrength = 0.3f;
     [SerializeField] private float erosionStrength = 0.2f;
     [SerializeField] private float domainWarpStrength = 2.0f;
-    
-    [Header("Multi-Layer Noise")]
-    [SerializeField] private float macroScale = 0.0001f;      // Large continents
-    [SerializeField] private float mesoScale = 0.001f;        // Hills and valleys
-    [SerializeField] private float microScale = 0.01f;         // Fine details
-    [SerializeField] private float macroWeight = 0.5f;
-    [SerializeField] private float mesoWeight = 0.3f;
-    [SerializeField] private float microWeight = 0.2f;
-    
-    [Header("Voronoi & Cellular")]
-    [SerializeField] private float voronoiScale = 0.005f;
-    [SerializeField] private float voronoiStrength = 0.3f;
-    [SerializeField] private float cellularScale = 0.02f;
-    [SerializeField] private float cellularStrength = 0.2f;
-    
-    [Header("Rivers & Valleys")]
-    [SerializeField] private float riverStrength = 0.5f;
-    [SerializeField] private float valleyStrength = 0.4f;
     
     [Header("GPU Resources")]
     [SerializeField] private ComputeShader terrainComputeShader;
@@ -372,24 +352,6 @@ public class InfinityRenderChunks : MonoBehaviour
         terrainComputeShader.SetFloat("plainStrength", plainStrength);
         terrainComputeShader.SetFloat("erosionStrength", erosionStrength);
         terrainComputeShader.SetFloat("domainWarpStrength", domainWarpStrength);
-        
-        // Multi-layer noise
-        terrainComputeShader.SetFloat("macroScale", macroScale);
-        terrainComputeShader.SetFloat("mesoScale", mesoScale);
-        terrainComputeShader.SetFloat("microScale", microScale);
-        terrainComputeShader.SetFloat("macroWeight", macroWeight);
-        terrainComputeShader.SetFloat("mesoWeight", mesoWeight);
-        terrainComputeShader.SetFloat("microWeight", microWeight);
-        
-        // Voronoi & Cellular
-        terrainComputeShader.SetFloat("voronoiScale", voronoiScale);
-        terrainComputeShader.SetFloat("voronoiStrength", voronoiStrength);
-        terrainComputeShader.SetFloat("cellularScale", cellularScale);
-        terrainComputeShader.SetFloat("cellularStrength", cellularStrength);
-        
-        // Rivers & Valleys
-        terrainComputeShader.SetFloat("riverStrength", riverStrength);
-        terrainComputeShader.SetFloat("valleyStrength", valleyStrength);
 
         // Dispatch
         terrainComputeShader.SetTexture(kernelHeight, "HeightMap", heightMap);
@@ -511,68 +473,56 @@ public class InfinityRenderChunks : MonoBehaviour
         args[3] = (uint)mesh.GetBaseVertex(0);
         argsBuffer.SetData(args);
         
-        // Calculate proper bounds from buffer data
-        // For now, use a reasonable bound size per chunk
-        Bounds bounds = new Bounds(Vector3.zero, Vector3.one * chunkSize * 2);
-        
-        Graphics.DrawMeshInstancedIndirect(mesh, 0, foliageMaterial, bounds, argsBuffer, 0, props);
+        Graphics.DrawMeshInstancedIndirect(mesh, 0, foliageMaterial, new Bounds(Vector3.zero, Vector3.one * 10000), argsBuffer, 0, props);
     }
     
     // CPU Noise for Safety
     private void UpdatePlayerSafety(Vector3d playerAbsPos)
     {
-        if (!enableSafety) return;
-        
-        // Compute Height at absolute coords
+        // Get approximated height
         float terrainHeight = GetTerrainHeightCPU((float)playerAbsPos.x, (float)playerAbsPos.z);
-        float playerHeight = (float)playerAbsPos.y;
         
-        // Only reset if player is significantly below terrain AND falling
-        float distanceBelowTerrain = terrainHeight - playerHeight;
-        
-        // Check if player is actually falling (velocity.y < 0) or already too far below
-        bool isFalling = false;
-        Rigidbody rb = player.GetComponent<Rigidbody>();
-        if (rb != null)
-        {
-            isFalling = rb.linearVelocity.y < -0.5f; // Falling with some velocity
-        }
-        
-        // Only reset if:
-        // 1. Player is below fall threshold (absolute position check)
-        // 2. AND (player is falling OR already too far below terrain)
-        // 3. AND distance below terrain exceeds max fall distance
-        if (playerHeight < fallThreshold && 
-            (isFalling || distanceBelowTerrain > maxFallDistance) &&
-            distanceBelowTerrain > 1.0f) // At least 1 unit below terrain
+        // Relaxed threshold: -20 units below approximated terrain
+        // The approximation might be off by 5-10 units due to lack of Voronoi/Hydrid logic on CPU
+        if (player.position.y < terrainHeight - 20.0f)
         {
             Vector3 newPos = player.position;
-            newPos.y = terrainHeight + safetyHeightOffset;
+            // Respawn high up to be safe
+            newPos.y = terrainHeight + safetyHeightOffset + 10.0f; 
             player.position = newPos;
             
-            if (rb != null)
-            {
-                rb.linearVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
-            }
-            
-            Debug.Log($"Player safety reset: Was at {playerHeight:F1}, terrain at {terrainHeight:F1}");
+            Rigidbody rb = player.GetComponent<Rigidbody>();
+            if (rb != null) rb.linearVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
         }
     }
 
     private float GetTerrainHeightCPU(float worldX, float worldZ)
     {
+        // Simplified CPU version of the Shader Logic
+        // We only calculate the BASE FBM to get a "floor" estimate.
+        // GPU adds mountains/ridges on top, so the real terrain is usually HIGHER than this.
+        // This makes this function strictly return a "lower bound" or "average", 
+        // which matches well with the "fall through" check (player < height).
+        // If real height is +50 (Mountain) and we calculate +10 (Base), the check (-20) might fail if player is at +30?
+        // Wait, if Player is at +30 (on mountain) and CPU thinks height is +10.
+        // Player < 10 - 20 = -10? False. Safe.
+        // If Player falls to -50. -50 < -10. True. Reset.
+        // So under-estimating height is SAFE for a "fall prevention" check. 
+        // Checks might be LATE, but never EARLY (Resetting while walking).
+        
         Vector2 worldPos = new Vector2(worldX, worldZ);
         Vector2 noisePos = (worldPos + new Vector2(seed * 100.0f, seed * 100.0f)) * noiseScale;
-        float h = Fbm(noisePos, octaves, persistence, lacunarity);
         
-        float qx = Fbm(noisePos + new Vector2(0.0f, 0.0f), 4, 0.5f, 2.0f);
-        float qy = Fbm(noisePos + new Vector2(5.2f, 1.3f), 4, 0.5f, 2.0f);
-        Vector2 q = new Vector2(qx, qy);
+        float continents = Fbm(noisePos * 0.1f, 3, 0.5f, 2.0f);
         
-        float ridge = 1.0f - Mathf.Abs(Noise(noisePos + q * 2.0f) * 2.0f - 1.0f);
-        h = Mathf.Lerp(h, ridge * h, 0.5f);
+        float height = 0;
+        if (continents < 0.3f) height = continents * 0.8f;
+        else height = continents;
         
-        return h * heightMultiplier;
+        // Add a small buffer for mountains approximation without expensive calls
+        if (continents > 0.6f) height += 0.2f * mountainStrength; 
+        
+        return height * heightMultiplier;
     }
     
     private float Fbm(Vector2 st, int oct, float pers, float lac)
@@ -580,14 +530,17 @@ public class InfinityRenderChunks : MonoBehaviour
         float value = 0.0f;
         float amplitude = 0.5f;
         float frequency = 1.0f;
+        float maxValue = 0.0f;
+
         for (int i = 0; i < oct; i++)
         {
             value += amplitude * Noise(st * frequency);
+            maxValue += amplitude;
             st += new Vector2(100.0f, 100.0f);
             frequency *= lac;
             amplitude *= pers;
         }
-        return value;
+        return value / maxValue;
     }
 
     private float Noise(Vector2 st)
