@@ -5,93 +5,155 @@ Shader "Custom/InstancedFoliage"
         _MainTex ("Albedo (RGB)", 2D) = "white" {}
         _Color ("Color", Color) = (1,1,1,1)
         _Cutoff ("Alpha Cutoff", Range(0,1)) = 0.5
+        _Smoothness ("Smoothness", Range(0,1)) = 0.2
+        _Metallic ("Metallic", Range(0,1)) = 0.0
     }
+    
     SubShader
     {
-        Tags { "RenderType"="Opaque" "Queue"="Geometry" }
+        Tags 
+        { 
+            "RenderType" = "TransparentCutout" 
+            "RenderPipeline" = "UniversalPipeline"
+            "Queue" = "AlphaTest"
+        }
         LOD 200
         Cull Off // Double sided for grass
 
-        CGPROGRAM
-        // Physically based Standard lighting model
-        #pragma surface surf Standard addshadow fullforwardshadows
-        #pragma multi_compile_instancing
-        #pragma instancing_options procedural:setup
-
-        #pragma target 5.0
-
-        sampler2D _MainTex;
-        fixed4 _Color;
-        fixed _Cutoff;
-
-        struct Input
+        Pass
         {
-            float2 uv_MainTex;
-        };
+            Name "ForwardLit"
+            Tags { "LightMode" = "UniversalForward" }
 
-        struct VegetationInstance {
-            float3 position;
-            float3 scale;
-            float rotationY;
-            int typeID;
-        };
+            HLSLPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma multi_compile_instancing
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS_CASCADE
+            #pragma multi_compile _ _SHADOWS_SOFT
+            #pragma multi_compile_fog
 
-        #ifdef UNITY_PROCEDURAL_INSTANCING_ENABLED
-            StructuredBuffer<VegetationInstance> vegetationBuffer;
-        #endif
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Shadows.hlsl"
 
-        void setup()
-        {
-            #ifdef UNITY_PROCEDURAL_INSTANCING_ENABLED
-                VegetationInstance data = vegetationBuffer[unity_InstanceID];
+            struct Attributes
+            {
+                float4 positionOS : POSITION;
+                float2 uv : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
 
-                float3 position = data.position;
-                float3 scale = data.scale;
-                float rotation = data.rotationY * 0.0174532924; // Degrees to radians
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+                float2 uv : TEXCOORD0;
+                float3 positionWS : TEXCOORD1;
+                float3 normalWS : TEXCOORD2;
+                float fogCoord : TEXCOORD3;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
 
-                // Create rotation matrix (Y-axis)
-                float c = cos(rotation);
-                float s = sin(rotation);
-                float4x4 rotationMatrix = float4x4(
-                    c, 0, s, 0,
-                    0, 1, 0, 0,
-                    -s, 0, c, 0,
-                    0, 0, 0, 1
+            TEXTURE2D(_MainTex);
+            SAMPLER(sampler_MainTex);
+
+            CBUFFER_START(UnityPerMaterial)
+                float4 _MainTex_ST;
+                float4 _Color;
+                float _Cutoff;
+                float _Smoothness;
+                float _Metallic;
+            CBUFFER_END
+
+            // Vegetation instance data structure
+            struct VegetationInstance
+            {
+                float3 position;
+                float3 scale;
+                float rotationY;
+                int typeID;
+            };
+
+            // Set via MaterialPropertyBlock in C# code
+            StructuredBuffer<VegetationInstance> _VegetationBuffer;
+
+            Varyings vert(Attributes input, uint instanceID : SV_InstanceID)
+            {
+                Varyings output;
+                UNITY_SETUP_INSTANCE_ID(input);
+                UNITY_TRANSFER_INSTANCE_ID(input, output);
+
+                VegetationInstance data = _VegetationBuffer[instanceID];
+                
+                // Apply rotation (Y-axis)
+                float angle = data.rotationY * 0.0174532924; // Degrees to radians
+                float c = cos(angle);
+                float s = sin(angle);
+                float3x3 rotMatrix = float3x3(
+                    c, 0, s,
+                    0, 1, 0,
+                    -s, 0, c
                 );
+                
+                // Apply scale and rotation
+                float3 localPos = mul(rotMatrix, input.positionOS.xyz * data.scale);
+                // Apply translation
+                float3 worldPos = localPos + data.position;
 
-                // Create scale matrix
-                float4x4 scaleMatrix = float4x4(
-                   scale.x, 0, 0, 0,
-                   0, scale.y, 0, 0,
-                   0, 0, scale.z, 0,
-                   0, 0, 0, 1
-                );
+                VertexPositionInputs vertexInput = GetVertexPositionInputs(worldPos);
+                VertexNormalInputs normalInput = GetVertexNormalInputs(mul(rotMatrix, float3(0, 1, 0))); // Rotate normal
+                
+                output.positionCS = vertexInput.positionCS;
+                output.positionWS = vertexInput.positionWS;
+                output.normalWS = normalInput.normalWS;
+                output.uv = TRANSFORM_TEX(input.uv, _MainTex);
+                output.fogCoord = ComputeFogFactor(vertexInput.positionCS.z);
+                
+                return output;
+            }
 
-                // Create translation matrix
-                float4x4 translationMatrix = float4x4(
-                   1, 0, 0, position.x,
-                   0, 1, 0, position.y,
-                   0, 0, 1, position.z,
-                   0, 0, 0, 1
-                );
-
-                // Combine: T * R * S
-                unity_ObjectToWorld = mul(translationMatrix, mul(rotationMatrix, scaleMatrix));
-            #endif
+            half4 frag(Varyings input) : SV_Target
+            {
+                UNITY_SETUP_INSTANCE_ID(input);
+                
+                half4 c = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv) * _Color;
+                
+                // Alpha cutoff
+                clip(c.a - _Cutoff);
+                
+                // Lighting
+                Light mainLight = GetMainLight(TransformWorldToShadowCoord(input.positionWS));
+                float NdotL = saturate(dot(input.normalWS, mainLight.direction));
+                
+                c.rgb *= mainLight.color * NdotL + unity_AmbientSky.rgb;
+                
+                // Apply fog
+                c.rgb = MixFog(c.rgb, input.fogCoord);
+                
+                return half4(c.rgb, c.a);
+            }
+            ENDHLSL
         }
 
-        void surf (Input IN, inout SurfaceOutputStandard o)
+        Pass
         {
-            fixed4 c = tex2D (_MainTex, IN.uv_MainTex) * _Color;
-            // Basic clip for leaves
-            clip(c.a - _Cutoff);
-            
-            o.Albedo = c.rgb;
-            o.Metallic = 0.0;
-            o.Smoothness = 0.2;
-            o.Alpha = c.a;
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+            Cull Off
+
+            HLSLPROGRAM
+            #pragma vertex ShadowPassVertex
+            #pragma fragment ShadowPassFragment
+            #pragma multi_compile_instancing
+
+            #include "Packages/com.unity.render-pipelines.universal/Shaders/ShadowCasterPass.hlsl"
+            ENDHLSL
         }
-        ENDCG
     }
-    FallBack "Diffuse"
+    FallBack "Universal Render Pipeline/Lit"
 }

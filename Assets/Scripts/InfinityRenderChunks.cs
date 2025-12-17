@@ -30,6 +30,12 @@ public class InfinityRenderChunks : MonoBehaviour
     [SerializeField] private float persistence = 0.5f;
     [SerializeField] private float lacunarity = 2f;
     
+    [Header("Advanced Terrain")]
+    [SerializeField] private float mountainStrength = 0.4f;
+    [SerializeField] private float plainStrength = 0.3f;
+    [SerializeField] private float erosionStrength = 0.2f;
+    [SerializeField] private float domainWarpStrength = 2.0f;
+    
     [Header("GPU Resources")]
     [SerializeField] private ComputeShader terrainComputeShader;
     [SerializeField] private Shader proceduralTerrainShader;
@@ -114,6 +120,9 @@ public class InfinityRenderChunks : MonoBehaviour
         
         terrainMaterial = new Material(proceduralTerrainShader);
         if (useFallback) terrainMaterial.color = new Color(0.4f, 0.6f, 0.4f); // Green
+        
+        // Set shader properties
+        terrainMaterial.SetFloat("_HeightMultiplier", heightMultiplier);
 
         // Foliage Logic
         if (instancedFoliageShader == null) instancedFoliageShader = Shader.Find("Custom/InstancedFoliage");
@@ -339,6 +348,10 @@ public class InfinityRenderChunks : MonoBehaviour
         terrainComputeShader.SetFloat("seed", seed);
         terrainComputeShader.SetFloat("moistureNoiseScale", 0.002f);
         terrainComputeShader.SetFloat("temperatureNoiseScale", 0.003f);
+        terrainComputeShader.SetFloat("mountainStrength", mountainStrength);
+        terrainComputeShader.SetFloat("plainStrength", plainStrength);
+        terrainComputeShader.SetFloat("erosionStrength", erosionStrength);
+        terrainComputeShader.SetFloat("domainWarpStrength", domainWarpStrength);
 
         // Dispatch
         terrainComputeShader.SetTexture(kernelHeight, "HeightMap", heightMap);
@@ -389,6 +402,8 @@ public class InfinityRenderChunks : MonoBehaviour
         
         mf.mesh = mesh;
         mr.material = terrainMaterial;
+        // Update material properties
+        terrainMaterial.SetFloat("_HeightMultiplier", heightMultiplier);
         mc.sharedMesh = mesh;
 
         // Vegetation
@@ -447,8 +462,10 @@ public class InfinityRenderChunks : MonoBehaviour
     {
         if (count == 0 || mesh == null || buffer == null) return;
         
-        foliageMaterial.SetBuffer("vegetationBuffer", buffer);
-        foliageMaterial.SetColor("_Color", color);
+        // Use MaterialPropertyBlock to set buffer per draw call
+        MaterialPropertyBlock props = new MaterialPropertyBlock();
+        props.SetBuffer("_VegetationBuffer", buffer);
+        props.SetColor("_Color", color);
         
         args[0] = (uint)mesh.GetIndexCount(0);
         args[1] = (uint)count;
@@ -456,7 +473,7 @@ public class InfinityRenderChunks : MonoBehaviour
         args[3] = (uint)mesh.GetBaseVertex(0);
         argsBuffer.SetData(args);
         
-        Graphics.DrawMeshInstancedIndirect(mesh, 0, foliageMaterial, new Bounds(Vector3.zero, Vector3.one * 10000), argsBuffer);
+        Graphics.DrawMeshInstancedIndirect(mesh, 0, foliageMaterial, new Bounds(Vector3.zero, Vector3.one * 10000), argsBuffer, 0, props);
     }
     
     // CPU Noise for Safety

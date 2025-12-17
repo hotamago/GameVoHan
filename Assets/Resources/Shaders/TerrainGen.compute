@@ -17,6 +17,12 @@ float seed;
 float moistureNoiseScale;
 float temperatureNoiseScale;
 
+// Advanced terrain parameters
+float mountainStrength;
+float plainStrength;
+float erosionStrength;
+float domainWarpStrength;
+
 // --- Outputs ---
 RWTexture2D<float> HeightMap; // R channel for height
 RWTexture2D<float4> BiomeMap; // R=BiomeIndex, G=Moisture, B=Temp, A=Unused
@@ -45,51 +51,129 @@ float noise(float2 st) {
     float b = random(i + float2(1.0, 0.0));
     float c = random(i + float2(0.0, 1.0));
     float d = random(i + float2(1.0, 1.0));
-    float2 u = f * f * (3.0 - 2.0 * f);
+    float2 u = f * f * (3.0 - 2.0 * f); // Smoothstep
     return lerp(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
 
+// Fractional Brownian Motion - multiple octaves of noise
 float fbm(float2 st, int oct, float pers, float lac) {
     float value = 0.0;
     float amplitude = 0.5;
     float frequency = 1.0;
+    float maxValue = 0.0;
+    
     for (int i = 0; i < oct; i++) {
         value += amplitude * noise(st * frequency);
-        st += 100.0; // Shift to avoid artifacts
+        maxValue += amplitude;
+        st += float2(100.0, 100.0); // Shift to avoid artifacts
         frequency *= lac;
         amplitude *= pers;
     }
-    return value; // 0..1 range approx
+    return value / maxValue; // Normalize to 0..1
+}
+
+// Ridge noise for mountain peaks
+float ridgeNoise(float2 st, int oct, float pers, float lac) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    float maxValue = 0.0;
+    
+    for (int i = 0; i < oct; i++) {
+        float n = noise(st * frequency);
+        n = abs(n * 2.0 - 1.0); // Create ridges
+        n = 1.0 - n; // Invert for peaks
+        n = n * n; // Sharpen peaks
+        value += amplitude * n;
+        maxValue += amplitude;
+        st += float2(100.0, 100.0);
+        frequency *= lac;
+        amplitude *= pers;
+    }
+    return value / maxValue;
+}
+
+// Domain warping for more natural features
+float2 domainWarp(float2 p, float strength) {
+    float2 q = float2(
+        fbm(p + float2(0.0, 0.0), 4, 0.5, 2.0),
+        fbm(p + float2(5.2, 1.3), 4, 0.5, 2.0)
+    );
+    return p + q * strength;
+}
+
+// Erosion simulation using simple thermal erosion
+float applyErosion(float height, float2 pos, float strength) {
+    // Simple erosion based on slope
+    float2 offset = float2(0.1, 0.1);
+    float hL = fbm(pos - offset, 3, 0.5, 2.0) * heightMultiplier;
+    float hR = fbm(pos + offset, 3, 0.5, 2.0) * heightMultiplier;
+    float hD = fbm(pos - float2(0.0, 0.1), 3, 0.5, 2.0) * heightMultiplier;
+    float hU = fbm(pos + float2(0.0, 0.1), 3, 0.5, 2.0) * heightMultiplier;
+    
+    float avgHeight = (hL + hR + hD + hU) * 0.25;
+    float slope = abs(height - avgHeight);
+    
+    // Erode steep slopes
+    if (slope > 5.0) {
+        height = lerp(height, avgHeight, strength * 0.1);
+    }
+    
+    return height;
 }
 
 float GetHeight(float2 worldPos) {
     float2 noisePos = (worldPos + float2(seed * 100.0, seed * 100.0)) * noiseScale;
-    float h = fbm(noisePos, octaves, persistence, lacunarity);
     
-    // Domain Warping for mountains
-    float2 q = float2(
-        fbm(noisePos + float2(0.0, 0.0), 4, 0.5, 2.0),
-        fbm(noisePos + float2(5.2, 1.3), 4, 0.5, 2.0)
-    );
+    // Apply domain warping for more natural features
+    float2 warpedPos = domainWarp(noisePos, domainWarpStrength);
     
-    // Add ridge noise for mountains
-    float ridge = 1.0 - abs(noise(noisePos + q * 2.0) * 2.0 - 1.0);
-    h = lerp(h, ridge * h, 0.5);
-
-    return h * heightMultiplier;
+    // Base terrain using FBM
+    float baseHeight = fbm(warpedPos, octaves, persistence, lacunarity);
+    
+    // Mountain generation using ridge noise
+    float2 mountainPos = warpedPos * 0.3; // Larger scale for mountains
+    float mountainNoise = ridgeNoise(mountainPos, 8, 0.4, 2.2);
+    float mountains = mountainNoise * mountainStrength;
+    
+    // Combine base terrain with mountains
+    float height = baseHeight;
+    
+    // Add mountains where base height is already high
+    if (baseHeight > 0.4) {
+        height = lerp(height, height + mountains, smoothstep(0.4, 0.7, baseHeight));
+    }
+    
+    // Create plains (flatten low areas)
+    if (baseHeight < 0.3) {
+        height = lerp(height, baseHeight * 0.5, plainStrength);
+    }
+    
+    // Apply erosion
+    if (erosionStrength > 0.0) {
+        height = applyErosion(height * heightMultiplier, warpedPos, erosionStrength) / heightMultiplier;
+    }
+    
+    // Final height
+    return height * heightMultiplier;
 }
 
-// 0=Ocean, 1=Beach, 2=Grass, 3=Forest, 4=Snow, 5=Desert
+// Enhanced biome system
+// 0=Ocean, 1=Beach, 2=Plains, 3=Grassland, 4=Forest, 5=Mountain, 6=Snow, 7=Desert
 float GetBiome(float heightNorm, float moisture, float temp) {
-    if (heightNorm < 0.2) return 0.0; // Ocean
-    if (heightNorm < 0.25) return 1.0; // Beach
+    if (heightNorm < 0.15) return 0.0; // Ocean
+    if (heightNorm < 0.22) return 1.0; // Beach
     
-    if (heightNorm > 0.8) return 4.0; // Snow
+    if (heightNorm > 0.85) return 6.0; // Snow peaks
+    if (heightNorm > 0.65) return 5.0; // Mountains
     
-    if (temp > 0.6 && moisture < 0.3) return 5.0; // Desert
-    if (moisture > 0.6) return 3.0; // Forest
+    // Biome based on moisture and temperature
+    if (temp > 0.65 && moisture < 0.3) return 7.0; // Desert
+    if (moisture > 0.65 && heightNorm < 0.5) return 4.0; // Forest
+    if (moisture > 0.4) return 3.0; // Grassland
+    if (heightNorm < 0.35) return 2.0; // Plains
     
-    return 2.0; // Grassland
+    return 3.0; // Default to grassland
 }
 
 [numthreads(8, 8, 1)]
@@ -103,11 +187,14 @@ void GenerateHeightmap (uint3 id : SV_DispatchThreadID)
 
     float height = GetHeight(worldPos);
     
-    // Moisture & Temp noise
-    float moisture = fbm((worldPos + seed * 500.0) * moistureNoiseScale, 3, 0.5, 2.0);
-    float temp = fbm((worldPos + seed * 800.0) * temperatureNoiseScale, 3, 0.5, 2.0);
+    // Moisture & Temp noise with better distribution
+    float moisture = fbm((worldPos + seed * 500.0) * moistureNoiseScale, 4, 0.5, 2.0);
+    float temp = fbm((worldPos + seed * 800.0) * temperatureNoiseScale, 4, 0.5, 2.0);
     
+    // Temperature varies with height (higher = colder)
     float heightNorm = height / heightMultiplier;
+    temp = lerp(temp, temp * 0.3, smoothstep(0.3, 0.9, heightNorm));
+    
     float biome = GetBiome(heightNorm, moisture, temp);
 
     HeightMap[id.xy] = height;
@@ -120,12 +207,13 @@ void CalculateNormals (uint3 id : SV_DispatchThreadID)
     if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
     
     // Finite difference method for normals from HeightMap
+    float step = chunkSize / (float)(resolution - 1);
     float hL = HeightMap[int2(max(0, (int)id.x - 1), id.y)];
     float hR = HeightMap[int2(min(resolution - 1, (int)id.x + 1), id.y)];
     float hD = HeightMap[int2(id.x, max(0, (int)id.y - 1))];
     float hU = HeightMap[int2(id.x, min(resolution - 1, (int)id.y + 1))];
     
-    float3 n = normalize(float3(hL - hR, 2.0, hD - hU)); // Simplified, assume uniform grid
+    float3 n = normalize(float3((hL - hR) / (2.0 * step), 2.0, (hD - hU) / (2.0 * step)));
     Normals[id.x + id.y * resolution] = n;
 }
 
@@ -176,7 +264,7 @@ void PlaceVegetation (uint3 id : SV_DispatchThreadID)
     float slope = 1.0 - Normals[id.x + id.y * resolution].y;
 
     if (heightNorm < 0.22) return; // Underwater/Beach
-    if (slope > 0.4) return; // Too steep
+    if (slope > 0.45) return; // Too steep
 
     // Spawning logic
     VegetationInstance inst;
@@ -185,29 +273,39 @@ void PlaceVegetation (uint3 id : SV_DispatchThreadID)
     inst.rotationY = rng * 360.0;
     
     // Forest: Trees
-    if (biome == 3.0) { // Forest
-        if (rng > 0.98) { // 2% chance per vertex
+    if (biome == 4.0) { // Forest
+        if (rng > 0.97) { // 3% chance per vertex
              inst.typeID = 0; // Tree
              VegetationBuffer.Append(inst);
              return;
         }
     }
     
-    // Everywhere: Grass
-    if (biome == 2.0 || biome == 3.0) {
-        if (rng > 0.8 && rng < 0.95) {
+    // Grassland: Some trees and grass
+    if (biome == 3.0) {
+        if (rng > 0.995) { // 0.5% chance for trees
+            inst.typeID = 0; // Tree
+            VegetationBuffer.Append(inst);
+            return;
+        }
+    }
+    
+    // Everywhere suitable: Grass
+    if (biome == 2.0 || biome == 3.0 || biome == 4.0) { // Plains, Grassland, Forest
+        if (rng > 0.75 && rng < 0.92) { // 17% chance
             inst.typeID = 2; // Grass
             // Slightly randomize position off-grid
-            inst.position.x += (rng - 0.5);
-            inst.position.z += (random(worldPos*2.0) - 0.5);
+            inst.position.x += (rng - 0.5) * 2.0;
+            inst.position.z += (random(worldPos*2.0) - 0.5) * 2.0;
             VegetationBuffer.Append(inst);
         }
     }
     
     // Mountains: Rocks
-    if (biome == 4.0 || slope > 0.2) {
-         if (rng > 0.99) {
+    if (biome == 5.0 || biome == 6.0 || slope > 0.25) { // Mountain, Snow, or steep
+         if (rng > 0.98) { // 2% chance
              inst.typeID = 1; // Rock
+             inst.scale = float3(1, 1, 1) * (0.5 + rng * 1.0); // Vary rock size more
              VegetationBuffer.Append(inst);
          }
     }

@@ -311,7 +311,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderChunks
   player: {fileID: 86797383}
-  chunkSize: 30
+  chunkSize: 100
   renderDistance: 2
   seed: 0
   floatingOriginThreshold: 500
@@ -319,13 +319,17 @@ MonoBehaviour:
   current_y: 0
   _debugLocalPos: {x: 0, y: 0, z: 0}
   enableSafety: 1
-  safetyHeightOffset: 2
-  resolution: 129
+  safetyHeightOffset: 10
+  resolution: 200
   heightMultiplier: 20
   noiseScale: 0.05
   octaves: 4
   persistence: 0.5
   lacunarity: 2
+  mountainStrength: 0.4
+  plainStrength: 0.3
+  erosionStrength: 0.2
+  domainWarpStrength: 2
   terrainComputeShader: {fileID: 0}
   proceduralTerrainShader: {fileID: 0}
   instancedFoliageShader: {fileID: 0}
