@@ -1,0 +1,209 @@
+// TerrainComputeShader.compute
+// GPU-accelerated terrain generation using Compute Shaders
+
+#pragma kernel GenerateHeightmap
+#pragma kernel GenerateBiomeMap
+#pragma kernel GenerateNormals
+
+#include "UnityCG.cginc"
+
+// Input parameters
+float _Seed;
+int _Resolution;
+float _HeightMultiplier;
+float _NoiseScale;
+int _Octaves;
+float _Persistence;
+float _Lacunarity;
+float _BiomeScale;
+float _TemperatureNoiseScale;
+float _MoistureNoiseScale;
+float2 _ChunkOffset; // World position offset for this chunk
+
+// Output textures
+RWTexture2D<float> _Heightmap;
+RWTexture2D<float4> _BiomeMap;
+RWTexture2D<float4> _Normals;
+
+// Perlin noise functions (GPU implementation)
+float random(float2 st) {
+    return frac(sin(dot(st.xy, float2(12.9898, 78.233))) * 43758.5453123);
+}
+
+float noise(float2 st) {
+    float2 i = floor(st);
+    float2 f = frac(st);
+
+    float a = random(i);
+    float b = random(i + float2(1.0, 0.0));
+    float c = random(i + float2(0.0, 1.0));
+    float d = random(i + float2(1.0, 1.0));
+
+    float2 u = f * f * (3.0 - 2.0 * f);
+
+    return lerp(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.y * u.x;
+}
+
+float fbm(float2 st) {
+    float value = 0.0;
+    float amplitude = 1.0;
+    float frequency = 0.0;
+
+    for (int i = 0; i < _Octaves; i++) {
+        value += amplitude * noise(st);
+        st *= _Lacunarity;
+        amplitude *= _Persistence;
+    }
+    return value;
+}
+
+// Improved Perlin noise for better terrain quality
+float perlinNoise(float2 p) {
+    float2 i = floor(p);
+    float2 f = frac(p);
+
+    float a = random(i);
+    float b = random(i + float2(1.0, 0.0));
+    float c = random(i + float2(0.0, 1.0));
+    float d = random(i + float2(1.0, 1.0));
+
+    float2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+
+    float x1 = lerp(a, b, u.x);
+    float x2 = lerp(c, d, u.x);
+    return lerp(x1, x2, u.y);
+}
+
+float fractalNoise(float2 p) {
+    float value = 0.0;
+    float amplitude = 1.0;
+    float frequency = _NoiseScale;
+
+    for (int i = 0; i < _Octaves; i++) {
+        value += amplitude * (perlinNoise(p * frequency + _Seed * 1000.0) * 2.0 - 1.0);
+        amplitude *= _Persistence;
+        frequency *= _Lacunarity;
+    }
+
+    // Normalize to 0-1 range
+    return (value + 1.0) * 0.5;
+}
+
+// Biome calculation
+float3 calculateBiome(float2 worldPos, float height) {
+    float tempNoise = perlinNoise(worldPos * _TemperatureNoiseScale + _Seed * 1000.0);
+    float moistureNoise = perlinNoise(worldPos * _MoistureNoiseScale + _Seed * 2000.0);
+    float biomeNoise = perlinNoise(worldPos * _BiomeScale + _Seed * 500.0);
+
+    // Biome classification (return as RGB values)
+    // R: temperature, G: moisture, B: biome type index
+    if (height < 0.1) {
+        // Ocean
+        return float3(tempNoise, moistureNoise, 0.0);
+    } else if (height < 0.15) {
+        // Beach
+        return float3(tempNoise, moistureNoise, 1.0);
+    } else if (height > 0.7) {
+        if (tempNoise < 0.3) {
+            // Snow
+            return float3(tempNoise, moistureNoise, 6.0);
+        } else {
+            // Mountain
+            return float3(tempNoise, moistureNoise, 5.0);
+        }
+    } else if (moistureNoise < 0.2 && tempNoise > 0.6) {
+        // Desert
+        return float3(tempNoise, moistureNoise, 4.0);
+    } else if (moistureNoise > 0.7 && tempNoise < 0.5) {
+        // Swamp
+        return float3(tempNoise, moistureNoise, 7.0);
+    } else if (moistureNoise > 0.5 && tempNoise > 0.4) {
+        // Forest
+        return float3(tempNoise, moistureNoise, 3.0);
+    } else {
+        // Grassland
+        return float3(tempNoise, moistureNoise, 2.0);
+    }
+}
+
+// Generate heightmap kernel
+[numthreads(8, 8, 1)]
+void GenerateHeightmap(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= _Resolution || id.y >= _Resolution) return;
+
+    // Calculate world position
+    float chunkSize = 100.0; // Should be passed as parameter
+    float step = chunkSize / (_Resolution - 1);
+    float2 localPos = float2(id.x * step, id.y * step);
+    float2 worldPos = _ChunkOffset + localPos;
+
+    // Generate base height using fractal noise
+    float baseHeight = fractalNoise(worldPos);
+
+    // Get biome data for height modification
+    float3 biomeData = calculateBiome(worldPos, baseHeight);
+
+    // Apply biome-specific height modifications
+    float finalHeight;
+    int biomeType = (int)biomeData.b;
+
+    if (biomeType == 0) { // Ocean
+        finalHeight = baseHeight * 0.1;
+    } else if (biomeType == 1) { // Beach
+        finalHeight = baseHeight * 0.15 + 0.1;
+    } else if (biomeType == 5) { // Mountain
+        finalHeight = baseHeight * 0.5 + 0.5;
+    } else if (biomeType == 6) { // Snow
+        finalHeight = baseHeight * 0.6 + 0.4;
+    } else if (biomeType == 4) { // Desert
+        finalHeight = baseHeight * 0.2 + 0.15;
+    } else { // Grassland, Forest, Swamp
+        finalHeight = baseHeight * 0.3 + 0.15;
+    }
+
+    _Heightmap[id.xy] = finalHeight * _HeightMultiplier;
+}
+
+// Generate biome map kernel
+[numthreads(8, 8, 1)]
+void GenerateBiomeMap(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= _Resolution || id.y >= _Resolution) return;
+
+    // Calculate world position
+    float chunkSize = 100.0;
+    float step = chunkSize / (_Resolution - 1);
+    float2 localPos = float2(id.x * step, id.y * step);
+    float2 worldPos = _ChunkOffset + localPos;
+
+    // Get height for biome calculation
+    float height = _Heightmap[id.xy] / _HeightMultiplier;
+
+    // Calculate biome data
+    float3 biomeData = calculateBiome(worldPos, height);
+
+    _BiomeMap[id.xy] = float4(biomeData, 1.0);
+}
+
+// Calculate normals kernel (for mesh generation)
+[numthreads(8, 8, 1)]
+void GenerateNormals(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= _Resolution || id.y >= _Resolution) return;
+
+    float chunkSize = 100.0;
+    float step = chunkSize / (_Resolution - 1);
+
+    // Sample neighboring heights for normal calculation
+    float hL = (id.x > 0) ? _Heightmap[uint2(id.x - 1, id.y)] : _Heightmap[id.xy];
+    float hR = (id.x < _Resolution - 1) ? _Heightmap[uint2(id.x + 1, id.y)] : _Heightmap[id.xy];
+    float hD = (id.y > 0) ? _Heightmap[uint2(id.x, id.y - 1)] : _Heightmap[id.xy];
+    float hU = (id.y < _Resolution - 1) ? _Heightmap[uint2(id.x, id.y + 1)] : _Heightmap[id.xy];
+
+    // Calculate normal using central differences
+    float3 normal = normalize(float3(
+        (hL - hR) / (2.0 * step),
+        2.0 * step,
+        (hD - hU) / (2.0 * step)
+    ));
+
+    _Normals[id.xy] = float4(normal, 1.0);
+}
