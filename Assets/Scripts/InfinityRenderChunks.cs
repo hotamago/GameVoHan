@@ -1,843 +1,412 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 using System.Collections.Generic;
+using System.Linq;
 
 public class InfinityRenderChunks : MonoBehaviour
 {
-    [Header("Chunk Settings")]
-    [SerializeField] private int chunkSize = 100; // Kích thước mỗi chunk (Unity units)
-    [SerializeField] private int renderDistance = 3; // Số chunks render xung quanh player
-    [SerializeField] private int seed = 0; // Seed cho terrain generation
+    [Header("General Settings")]
+    [SerializeField] private Transform player;
+    [SerializeField] private int chunkSize = 100;
+    [SerializeField] private int renderDistance = 4;
+    [SerializeField] private int seed = 0;
+
+    [Header("Terrain Settings")]
+    [SerializeField] private int resolution = 129; 
+    [SerializeField] private float heightMultiplier = 30f;
+    [SerializeField] private float noiseScale = 0.005f;
+    [SerializeField] private int octaves = 6;
+    [SerializeField] private float persistence = 0.5f;
+    [SerializeField] private float lacunarity = 2f;
     
-    [Header("References")]
-    [SerializeField] private Transform player; // Transform của player
-    [SerializeField] private GameObject chunkPrefab; // Prefab tile terrain object cho chunk
+    [Header("GPU Resources")]
+    [SerializeField] private ComputeShader terrainComputeShader;
+    [SerializeField] private Shader proceduralTerrainShader;
+    [SerializeField] private Shader instancedFoliageShader;
     
-    [Header("Terrain Generation Settings")]
-    [SerializeField] private int terrainResolution = 129; // Resolution cho heightmap (nên là 2^n + 1)
-    [SerializeField] private float heightMultiplier = 20f; // Độ cao tối đa của terrain
-    [SerializeField] private float noiseScale = 0.05f; // Scale cho Perlin noise
-    [SerializeField] private int octaves = 4; // Số octaves cho fractal noise
-    [SerializeField] private float persistence = 0.5f; // Persistence cho fractal noise
-    [SerializeField] private float lacunarity = 2f; // Lacunarity cho fractal noise
+    [Header("Vegetation Mesh")]
+    [SerializeField] private Mesh treeMesh;
+    [SerializeField] private Mesh rockMesh;
+    [SerializeField] private Mesh grassMesh;
+    [SerializeField] private Texture2D vegetationTexture;
+
+    // Private State
+    private Vector2Int currentChunkCoord;
+    private Dictionary<Vector2Int, ChunkData> loadedChunks = new Dictionary<Vector2Int, ChunkData>();
+    private Material terrainMaterial;
+    private Material foliageMaterial;
     
-    [Header("Biome Settings")]
-    [SerializeField] private float biomeScale = 0.01f; // Scale cho biome distribution
-    [SerializeField] private float temperatureNoiseScale = 0.02f;
-    [SerializeField] private float moistureNoiseScale = 0.02f;
-    
-    [Header("Object Spawning")]
-    [SerializeField] private bool enableObjectSpawning = true;
-    [SerializeField] private int treesPerChunk = 20;
-    [SerializeField] private int rocksPerChunk = 15;
-    [SerializeField] private int grassPatchesPerChunk = 50;
-    [SerializeField] private GameObject[] treePrefabs; // Array các tree prefabs
-    [SerializeField] private GameObject[] rockPrefabs; // Array các rock prefabs
-    [SerializeField] private GameObject[] grassPrefabs; // Array các grass/foliage prefabs
-    [SerializeField] private GameObject[] flowerPrefabs; // Array các flower prefabs
-    [SerializeField] private float objectSpawnRadius = 5f; // Khoảng cách tối thiểu giữa các objects
-    
-    // Chunk coordinates sử dụng int64 để tránh tràn số
-    private long currentChunkX = 0;
-    private long currentChunkY = 0;
-    
-    // Dictionary lưu trữ các chunks đã được tạo
-    private Dictionary<string, ChunkData> loadedChunks = new Dictionary<string, ChunkData>();
-    
-    // World offset để dịch chuyển toàn bộ thế giới khi cần
-    private Vector3 worldOffset = Vector3.zero;
-    
-    // Enum cho các loại biome
-    private enum BiomeType
-    {
-        Ocean,
-        Beach,
-        Grassland,
-        Forest,
-        Desert,
-        Mountain,
-        Snow,
-        Swamp
-    }
-    
-    // Cache cho object spawning để tránh spawn quá gần nhau
-    private Dictionary<string, List<Vector3>> chunkSpawnedObjects = new Dictionary<string, List<Vector3>>();
-    
-    // Lớp để lưu trữ thông tin chunk
+    private ComputeBuffer argsBufferTree;
+    private ComputeBuffer argsBufferRock;
+    private ComputeBuffer argsBufferGrass;
+    private uint[] args = new uint[5] { 0, 0, 0, 0, 0 };
+
     private class ChunkData
     {
-        public long chunkX;
-        public long chunkY;
-        public GameObject chunkObject;
-        public Vector3 worldPosition;
-        
-        public ChunkData(long x, long y, GameObject obj, Vector3 pos)
-        {
-            chunkX = x;
-            chunkY = y;
-            chunkObject = obj;
-            worldPosition = pos;
-        }
+        public GameObject gameObject;
+        // Separate buffers for each type
+        public ComputeBuffer treeBuffer;
+        public ComputeBuffer rockBuffer;
+        public ComputeBuffer grassBuffer;
+        public int treeCount;
+        public int rockCount;
+        public int grassCount;
+        public bool isReady;
     }
-    
-    void Start()
+
+    private void Start()
     {
         if (player == null)
         {
-            // Tự động tìm player nếu không được gán
-            GameObject playerObj = GameObject.FindGameObjectWithTag("Player");
-            if (playerObj != null)
-            {
-                player = playerObj.transform;
-            }
-            else
-            {
-                Debug.LogError("InfinityRenderChunks: Không tìm thấy Player! Vui lòng gán Transform của player.");
-                return;
-            }
+             GameObject p = GameObject.FindGameObjectWithTag("Player");
+             if (p != null) player = p.transform;
         }
+
+        if (seed == 0) seed = Random.Range(-10000, 10000);
         
-        // Khởi tạo seed
-        if (seed == 0)
+        // Initialize Materials
+        if (proceduralTerrainShader == null) proceduralTerrainShader = Shader.Find("Custom/ProceduralTerrain");
+        if (terrainMaterial == null) 
         {
-            seed = Random.Range(int.MinValue, int.MaxValue);
+            if (proceduralTerrainShader != null) terrainMaterial = new Material(proceduralTerrainShader);
+            else Debug.LogError("ProceduralTerrain Shader not found!");
         }
-        Random.InitState(seed);
         
-        // Load chunks ban đầu
-        UpdateChunks();
+        if (instancedFoliageShader == null) instancedFoliageShader = Shader.Find("Custom/InstancedFoliage");
+        if (foliageMaterial == null) 
+        {
+             if (instancedFoliageShader != null)
+             {
+                foliageMaterial = new Material(instancedFoliageShader);
+                if (vegetationTexture != null) foliageMaterial.mainTexture = vegetationTexture;
+             }
+             else Debug.LogError("InstancedFoliage Shader not found!");
+        }
+
+        // Load Default Meshes as fallbacks
+        if (treeMesh == null) { GameObject p = GameObject.CreatePrimitive(PrimitiveType.Cylinder); treeMesh = p.GetComponent<MeshFilter>().sharedMesh; Destroy(p); }
+        if (rockMesh == null) { GameObject p = GameObject.CreatePrimitive(PrimitiveType.Cube); rockMesh = p.GetComponent<MeshFilter>().sharedMesh; Destroy(p); }
+        if (grassMesh == null) { GameObject p = GameObject.CreatePrimitive(PrimitiveType.Quad); grassMesh = p.GetComponent<MeshFilter>().sharedMesh; Destroy(p); }
+
+        if (terrainComputeShader == null) terrainComputeShader = Resources.Load<ComputeShader>("Shaders/TerrainGen");
+
+        UpdateChunksImmediate();
     }
-    
-    void Update()
+
+    private void Update()
     {
         if (player == null) return;
-        
-        // Tính toán chunk hiện tại của player
-        Vector3 playerWorldPos = player.position + worldOffset;
-        long newChunkX = WorldToChunkCoord(playerWorldPos.x);
-        long newChunkY = WorldToChunkCoord(playerWorldPos.z);
-        
-        // Kiểm tra xem player có di chuyển sang chunk mới không
-        if (newChunkX != currentChunkX || newChunkY != currentChunkY)
+
+        Vector3 playerPos = player.position;
+        int pX = Mathf.FloorToInt(playerPos.x / chunkSize);
+        int pZ = Mathf.FloorToInt(playerPos.z / chunkSize);
+        Vector2Int playerChunk = new Vector2Int(pX, pZ);
+
+        if (playerChunk != currentChunkCoord)
         {
-            // Player đã di chuyển sang chunk mới
-            long deltaX = newChunkX - currentChunkX;
-            long deltaY = newChunkY - currentChunkY;
-            
-            // Dịch chuyển world offset để chunk mới có gốc tại (0,0)
-            worldOffset.x -= deltaX * chunkSize;
-            worldOffset.z -= deltaY * chunkSize;
-            
-            // Cập nhật chunk hiện tại
-            currentChunkX = newChunkX;
-            currentChunkY = newChunkY;
-            
-            // Dịch chuyển tất cả các chunks đã load
-            ShiftAllChunks(-deltaX * chunkSize, -deltaY * chunkSize);
-            
-            // Cập nhật chunks
+            currentChunkCoord = playerChunk;
             UpdateChunks();
         }
+
+        RenderVegetation();
     }
-    
-    // Chuyển đổi tọa độ world sang chunk coordinate (int64)
-    private long WorldToChunkCoord(float worldPos)
-    {
-        if (worldPos < 0)
-        {
-            return (long)((worldPos - chunkSize + 1) / chunkSize);
-        }
-        return (long)(worldPos / chunkSize);
-    }
-    
-    // Chuyển đổi chunk coordinate sang tọa độ world (gốc của chunk)
-    private Vector3 ChunkToWorldPosition(long chunkX, long chunkY)
-    {
-        return new Vector3(
-            chunkX * chunkSize - worldOffset.x,
-            0,
-            chunkY * chunkSize - worldOffset.z
-        );
-    }
-    
-    // Dịch chuyển tất cả chunks khi player di chuyển sang chunk mới
-    private void ShiftAllChunks(float deltaX, float deltaZ)
-    {
-        foreach (var chunk in loadedChunks.Values)
-        {
-            if (chunk.chunkObject != null)
-            {
-                chunk.chunkObject.transform.position += new Vector3(deltaX, 0, deltaZ);
-                chunk.worldPosition = chunk.chunkObject.transform.position;
-            }
-        }
-    }
-    
-    // Cập nhật danh sách chunks cần render
+
     private void UpdateChunks()
     {
-        // Tạo set các chunks cần load
-        HashSet<string> chunksToLoad = new HashSet<string>();
-        
-        for (long x = currentChunkX - renderDistance; x <= currentChunkX + renderDistance; x++)
+        List<Vector2Int> activeCoords = new List<Vector2Int>();
+
+        for (int x = -renderDistance; x <= renderDistance; x++)
         {
-            for (long y = currentChunkY - renderDistance; y <= currentChunkY + renderDistance; y++)
+            for (int y = -renderDistance; y <= renderDistance; y++)
             {
-                string chunkKey = GetChunkKey(x, y);
-                chunksToLoad.Add(chunkKey);
-                
-                // Nếu chunk chưa được load, tạo mới
-                if (!loadedChunks.ContainsKey(chunkKey))
-                {
-                    CreateChunk(x, y);
-                }
+                activeCoords.Add(currentChunkCoord + new Vector2Int(x, y));
             }
         }
-        
-        // Unload các chunks nằm ngoài render distance
-        List<string> chunksToUnload = new List<string>();
+
+        // Unload old
+        List<Vector2Int> toRemove = new List<Vector2Int>();
         foreach (var kvp in loadedChunks)
         {
-            if (!chunksToLoad.Contains(kvp.Key))
+            if (!activeCoords.Contains(kvp.Key))
+                toRemove.Add(kvp.Key);
+        }
+
+        foreach (var coord in toRemove)
+        {
+            UnloadChunk(coord);
+        }
+
+        // Load new
+        foreach (var coord in activeCoords)
+        {
+            if (!loadedChunks.ContainsKey(coord))
             {
-                chunksToUnload.Add(kvp.Key);
-            }
-        }
-        
-        foreach (string key in chunksToUnload)
-        {
-            UnloadChunk(key);
-        }
-    }
-    
-    // Tạo chunk mới
-    private void CreateChunk(long chunkX, long chunkY)
-    {
-        Vector3 chunkWorldPos = ChunkToWorldPosition(chunkX, chunkY);
-        
-        GameObject chunkObj;
-        if (chunkPrefab != null)
-        {
-            // Sử dụng chunkPrefab như tile terrain object
-            chunkObj = Instantiate(chunkPrefab, chunkWorldPos, Quaternion.identity, transform);
-            chunkObj.name = $"Chunk_{chunkX}_{chunkY}";
-        }
-        else
-        {
-            // Tạo chunk đơn giản nếu không có prefab
-            chunkObj = new GameObject($"Chunk_{chunkX}_{chunkY}");
-            chunkObj.transform.position = chunkWorldPos;
-            chunkObj.transform.parent = transform;
-            
-            // Thêm mesh renderer đơn giản
-            MeshFilter meshFilter = chunkObj.AddComponent<MeshFilter>();
-            MeshRenderer meshRenderer = chunkObj.AddComponent<MeshRenderer>();
-            
-            // Generate mesh cho chunk (có thể customize)
-            meshFilter.mesh = GenerateChunkMesh(chunkX, chunkY);
-            
-            // Material mặc định
-            meshRenderer.material = new Material(Shader.Find("Standard"));
-        }
-        
-        ChunkData chunkData = new ChunkData(chunkX, chunkY, chunkObj, chunkWorldPos);
-        loadedChunks[GetChunkKey(chunkX, chunkY)] = chunkData;
-        
-        // Gọi hàm generate terrain dựa trên seed
-        GenerateTerrainForChunk(chunkObj, chunkX, chunkY);
-    }
-    
-    // Unload chunk
-    private void UnloadChunk(string chunkKey)
-    {
-        if (loadedChunks.TryGetValue(chunkKey, out ChunkData chunkData))
-        {
-            if (chunkData.chunkObject != null)
-            {
-                Destroy(chunkData.chunkObject);
-            }
-            loadedChunks.Remove(chunkKey);
-            
-            // Clean up spawned objects cache
-            if (chunkSpawnedObjects.ContainsKey(chunkKey))
-            {
-                chunkSpawnedObjects.Remove(chunkKey);
+                CreateChunk(coord);
             }
         }
     }
     
-    // Tạo key cho chunk từ tọa độ
-    private string GetChunkKey(long x, long y)
+    private void UpdateChunksImmediate()
     {
-        return $"{x}_{y}";
-    }
-    
-    // Generate mesh đơn giản cho chunk (có thể customize)
-    private Mesh GenerateChunkMesh(long chunkX, long chunkY)
-    {
-        Mesh mesh = new Mesh();
-        mesh.name = $"ChunkMesh_{chunkX}_{chunkY}";
-        
-        // Tạo plane đơn giản
-        int resolution = 10;
-        Vector3[] vertices = new Vector3[resolution * resolution];
-        int[] triangles = new int[(resolution - 1) * (resolution - 1) * 6];
-        Vector2[] uv = new Vector2[vertices.Length];
-        
-        float step = chunkSize / (float)(resolution - 1);
-        
-        for (int z = 0; z < resolution; z++)
-        {
-            for (int x = 0; x < resolution; x++)
-            {
-                int index = z * resolution + x;
-                float worldX = x * step;
-                float worldZ = z * step;
-                
-                // Có thể thêm noise/heightmap ở đây
-                float height = GetHeightAt(worldX, worldZ, chunkX, chunkY);
-                
-                vertices[index] = new Vector3(worldX, height, worldZ);
-                uv[index] = new Vector2(x / (float)(resolution - 1), z / (float)(resolution - 1));
-            }
-        }
-        
-        int triIndex = 0;
-        for (int z = 0; z < resolution - 1; z++)
-        {
-            for (int x = 0; x < resolution - 1; x++)
-            {
-                int i = z * resolution + x;
-                
-                triangles[triIndex] = i;
-                triangles[triIndex + 1] = i + resolution;
-                triangles[triIndex + 2] = i + 1;
-                
-                triangles[triIndex + 3] = i + 1;
-                triangles[triIndex + 4] = i + resolution;
-                triangles[triIndex + 5] = i + resolution + 1;
-                
-                triIndex += 6;
-            }
-        }
-        
-        mesh.vertices = vertices;
-        mesh.triangles = triangles;
-        mesh.uv = uv;
-        mesh.RecalculateNormals();
-        
-        return mesh;
-    }
-    
-    // Lấy height tại vị trí (fallback cho GenerateChunkMesh cũ)
-    private float GetHeightAt(float localX, float localZ, long chunkX, long chunkY)
-    {
-        // Tính world position
-        float worldX = chunkX * chunkSize + localX;
-        float worldZ = chunkY * chunkSize + localZ;
-        
-        // Lấy biome (không gây vòng lặp vì GetBiomeAt không gọi GetHeightAt nữa)
-        BiomeType biome = GetBiomeAt(worldX, worldZ);
-        
-        // Sử dụng GetAdvancedHeightAt với biome
-        return GetAdvancedHeightAt(localX, localZ, chunkX, chunkY, biome);
-    }
-    
-    // Generate terrain cho chunk - Hệ thống terrain generation chuyên nghiệp
-    private void GenerateTerrainForChunk(GameObject chunkObj, long chunkX, long chunkY)
-    {
-        string chunkKey = GetChunkKey(chunkX, chunkY);
-        
-        // Tính toán world position thực tế của chunk
-        float worldX = chunkX * chunkSize;
-        float worldZ = chunkY * chunkSize;
-        
-        // Xác định biome cho chunk này
-        BiomeType biome = GetBiomeAt(worldX, worldZ);
-        
-        // Tạo container cho các objects được spawn
-        Transform objectsContainer = null;
-        if (enableObjectSpawning)
-        {
-            GameObject containerObj = new GameObject("Objects");
-            containerObj.transform.SetParent(chunkObj.transform);
-            containerObj.transform.localPosition = Vector3.zero;
-            objectsContainer = containerObj.transform;
-            chunkSpawnedObjects[chunkKey] = new List<Vector3>();
-        }
-        
-        // Generate terrain mesh nếu chunk không có Terrain component
-        Terrain terrain = chunkObj.GetComponent<Terrain>();
-        if (terrain == null)
-        {
-            MeshFilter meshFilter = chunkObj.GetComponent<MeshFilter>();
-            if (meshFilter != null)
-            {
-                meshFilter.mesh = GenerateAdvancedChunkMesh(chunkX, chunkY, biome);
-                
-                // Áp dụng material dựa trên biome
-                MeshRenderer meshRenderer = chunkObj.GetComponent<MeshRenderer>();
-                if (meshRenderer != null)
-                {
-                    meshRenderer.material = GetBiomeMaterial(biome);
-                }
-            }
-        }
-        else
-        {
-            // Nếu có Terrain component, generate heightmap
-            GenerateTerrainHeightmap(terrain, chunkX, chunkY, biome);
-            ApplyTerrainTextures(terrain, biome);
-        }
-        
-        // Spawn objects dựa trên biome
-        if (enableObjectSpawning && objectsContainer != null)
-        {
-            SpawnTerrainObjects(chunkObj, chunkX, chunkY, biome, objectsContainer);
-        }
-        
-        // Thêm collider nếu chưa có
-        if (chunkObj.GetComponent<Collider>() == null && chunkObj.GetComponent<TerrainCollider>() == null)
-        {
-            MeshCollider meshCollider = chunkObj.AddComponent<MeshCollider>();
-            MeshFilter mf = chunkObj.GetComponent<MeshFilter>();
-            if (mf != null && mf.mesh != null)
-            {
-                meshCollider.sharedMesh = mf.mesh;
-            }
-        }
-    }
-    
-    // Tính height từ noise mà không cần biome (để tránh vòng lặp đệ quy)
-    private float GetRawHeightFromNoise(float worldX, float worldZ)
-    {
-        // Fractal noise với nhiều octaves (giống GetAdvancedHeightAt nhưng không có biome adjustment)
-        float height = 0f;
-        float amplitude = 1f;
-        float frequency = noiseScale;
-        
-        for (int i = 0; i < octaves; i++)
-        {
-            float sampleX = (worldX + seed * 1000f) * frequency;
-            float sampleZ = (worldZ + seed * 1000f) * frequency;
-            
-            float noiseValue = Mathf.PerlinNoise(sampleX, sampleZ) * 2f - 1f;
-            height += noiseValue * amplitude;
-            
-            amplitude *= persistence;
-            frequency *= lacunarity;
-        }
-        
-        // Normalize height
-        height = (height + 1f) * 0.5f;
-        
-        return height * heightMultiplier;
-    }
-    
-    // Xác định biome tại vị trí
-    private BiomeType GetBiomeAt(float worldX, float worldZ)
-    {
-        // Sử dụng noise để tạo temperature và moisture
-        float tempNoise = Mathf.PerlinNoise(
-            (worldX + seed * 1000f) * temperatureNoiseScale,
-            (worldZ + seed * 1000f) * temperatureNoiseScale
-        );
-        
-        float moistureNoise = Mathf.PerlinNoise(
-            (worldX + seed * 2000f) * moistureNoiseScale,
-            (worldZ + seed * 2000f) * moistureNoiseScale
-        );
-        
-        // Biome distribution noise
-        float biomeNoise = Mathf.PerlinNoise(
-            (worldX + seed * 500f) * biomeScale,
-            (worldZ + seed * 500f) * biomeScale
-        );
-        
-        // Tính height trực tiếp từ noise (không gọi GetHeightAt để tránh vòng lặp)
-        float height = GetRawHeightFromNoise(worldX, worldZ);
-        float normalizedHeight = height / heightMultiplier;
-        
-        // Xác định biome dựa trên height, temperature, moisture
-        if (normalizedHeight < 0.1f)
-        {
-            return BiomeType.Ocean;
-        }
-        else if (normalizedHeight < 0.15f)
-        {
-            return BiomeType.Beach;
-        }
-        else if (normalizedHeight > 0.7f)
-        {
-            if (tempNoise < 0.3f)
-                return BiomeType.Snow;
-            else
-                return BiomeType.Mountain;
-        }
-        else if (moistureNoise < 0.2f && tempNoise > 0.6f)
-        {
-            return BiomeType.Desert;
-        }
-        else if (moistureNoise > 0.7f && tempNoise < 0.5f)
-        {
-            return BiomeType.Swamp;
-        }
-        else if (moistureNoise > 0.5f && tempNoise > 0.4f)
-        {
-            return BiomeType.Forest;
-        }
-        else
-        {
-            return BiomeType.Grassland;
-        }
-    }
-    
-    // Generate mesh nâng cao với height variation
-    private Mesh GenerateAdvancedChunkMesh(long chunkX, long chunkY, BiomeType biome)
-    {
-        Mesh mesh = new Mesh();
-        mesh.name = $"ChunkMesh_{chunkX}_{chunkY}";
-        
-        int resolution = terrainResolution;
-        Vector3[] vertices = new Vector3[resolution * resolution];
-        int[] triangles = new int[(resolution - 1) * (resolution - 1) * 6];
-        Vector2[] uv = new Vector2[vertices.Length];
-        Vector3[] normals = new Vector3[vertices.Length];
-        
-        float step = chunkSize / (float)(resolution - 1);
-        
-        // Generate vertices với height variation
-        for (int z = 0; z < resolution; z++)
-        {
-            for (int x = 0; x < resolution; x++)
-            {
-                int index = z * resolution + x;
-                float localX = x * step;
-                float localZ = z * step;
-                
-                float height = GetAdvancedHeightAt(localX, localZ, chunkX, chunkY, biome);
-                
-                vertices[index] = new Vector3(localX, height, localZ);
-                uv[index] = new Vector2(x / (float)(resolution - 1), z / (float)(resolution - 1));
-            }
-        }
-        
-        // Generate triangles
-        int triIndex = 0;
-        for (int z = 0; z < resolution - 1; z++)
-        {
-            for (int x = 0; x < resolution - 1; x++)
-            {
-                int i = z * resolution + x;
-                
-                triangles[triIndex] = i;
-                triangles[triIndex + 1] = i + resolution;
-                triangles[triIndex + 2] = i + 1;
-                
-                triangles[triIndex + 3] = i + 1;
-                triangles[triIndex + 4] = i + resolution;
-                triangles[triIndex + 5] = i + resolution + 1;
-                
-                triIndex += 6;
-            }
-        }
-        
-        mesh.vertices = vertices;
-        mesh.triangles = triangles;
-        mesh.uv = uv;
-        mesh.RecalculateNormals();
-        mesh.RecalculateBounds();
-        
-        return mesh;
-    }
-    
-    // Lấy height nâng cao với fractal noise
-    private float GetAdvancedHeightAt(float localX, float localZ, long chunkX, long chunkY, BiomeType biome)
-    {
-        float worldX = chunkX * chunkSize + localX;
-        float worldZ = chunkY * chunkSize + localZ;
-        
-        // Fractal noise với nhiều octaves
-        float height = 0f;
-        float amplitude = 1f;
-        float frequency = noiseScale;
-        
-        for (int i = 0; i < octaves; i++)
-        {
-            float sampleX = (worldX + seed * 1000f) * frequency;
-            float sampleZ = (worldZ + seed * 1000f) * frequency;
-            
-            float noiseValue = Mathf.PerlinNoise(sampleX, sampleZ) * 2f - 1f;
-            height += noiseValue * amplitude;
-            
-            amplitude *= persistence;
-            frequency *= lacunarity;
-        }
-        
-        // Normalize height
-        height = (height + 1f) * 0.5f;
-        
-        // Điều chỉnh height dựa trên biome
-        switch (biome)
-        {
-            case BiomeType.Ocean:
-                height *= 0.1f;
-                break;
-            case BiomeType.Beach:
-                height = height * 0.15f + 0.1f;
-                break;
-            case BiomeType.Mountain:
-                height = height * 0.5f + 0.5f;
-                break;
-            case BiomeType.Snow:
-                height = height * 0.6f + 0.4f;
-                break;
-            case BiomeType.Desert:
-                height = height * 0.2f + 0.15f;
-                break;
-            default:
-                height = height * 0.3f + 0.15f;
-                break;
-        }
-        
-        return height * heightMultiplier;
-    }
-    
-    // Generate heightmap cho Unity Terrain
-    private void GenerateTerrainHeightmap(Terrain terrain, long chunkX, long chunkY, BiomeType biome)
-    {
-        TerrainData terrainData = terrain.terrainData;
-        if (terrainData == null) return;
-        
-        int resolution = terrainData.heightmapResolution;
-        float[,] heights = new float[resolution, resolution];
-        
-        float step = chunkSize / (float)(resolution - 1);
-        
-        for (int z = 0; z < resolution; z++)
-        {
-            for (int x = 0; x < resolution; x++)
-            {
-                float localX = x * step;
-                float localZ = z * step;
-                float height = GetAdvancedHeightAt(localX, localZ, chunkX, chunkY, biome);
-                heights[z, x] = height / heightMultiplier;
-            }
-        }
-        
-        terrainData.SetHeights(0, 0, heights);
-    }
-    
-    // Áp dụng textures cho Terrain dựa trên biome
-    private void ApplyTerrainTextures(Terrain terrain, BiomeType biome)
-    {
-        TerrainData terrainData = terrain.terrainData;
-        if (terrainData == null) return;
-        
-        // Có thể thêm logic để set terrain textures/layers dựa trên biome
-        // Đây là nơi bạn có thể customize textures cho từng biome
-    }
-    
-    // Lấy material dựa trên biome
-    private Material GetBiomeMaterial(BiomeType biome)
-    {
-        Material mat = new Material(Shader.Find("Standard"));
-        
-        // Set color dựa trên biome
-        switch (biome)
-        {
-            case BiomeType.Ocean:
-                mat.color = new Color(0.1f, 0.3f, 0.5f);
-                break;
-            case BiomeType.Beach:
-                mat.color = new Color(0.9f, 0.85f, 0.7f);
-                break;
-            case BiomeType.Grassland:
-                mat.color = new Color(0.4f, 0.7f, 0.3f);
-                break;
-            case BiomeType.Forest:
-                mat.color = new Color(0.2f, 0.5f, 0.2f);
-                break;
-            case BiomeType.Desert:
-                mat.color = new Color(0.9f, 0.8f, 0.6f);
-                break;
-            case BiomeType.Mountain:
-                mat.color = new Color(0.5f, 0.5f, 0.5f);
-                break;
-            case BiomeType.Snow:
-                mat.color = new Color(0.9f, 0.9f, 0.95f);
-                break;
-            case BiomeType.Swamp:
-                mat.color = new Color(0.3f, 0.4f, 0.3f);
-                break;
-        }
-        
-        return mat;
-    }
-    
-    // Spawn objects trên terrain
-    private void SpawnTerrainObjects(GameObject chunkObj, long chunkX, long chunkY, BiomeType biome, Transform container)
-    {
-        string chunkKey = GetChunkKey(chunkX, chunkY);
-        List<Vector3> spawnedPositions = chunkSpawnedObjects[chunkKey];
-        
-        // Spawn trees
-        if (treePrefabs != null && treePrefabs.Length > 0)
-        {
-            int treeCount = GetObjectCountForBiome(biome, treesPerChunk, true);
-            SpawnObjects(treePrefabs, treeCount, chunkX, chunkY, biome, container, spawnedPositions, 2f);
-        }
-        
-        // Spawn rocks
-        if (rockPrefabs != null && rockPrefabs.Length > 0)
-        {
-            int rockCount = GetObjectCountForBiome(biome, rocksPerChunk, false);
-            SpawnObjects(rockPrefabs, rockCount, chunkX, chunkY, biome, container, spawnedPositions, 1.5f);
-        }
-        
-        // Spawn grass/foliage
-        if (grassPrefabs != null && grassPrefabs.Length > 0)
-        {
-            int grassCount = GetObjectCountForBiome(biome, grassPatchesPerChunk, true);
-            SpawnObjects(grassPrefabs, grassCount, chunkX, chunkY, biome, container, spawnedPositions, 0.5f);
-        }
-        
-        // Spawn flowers (chỉ ở một số biome)
-        if (flowerPrefabs != null && flowerPrefabs.Length > 0 && 
-            (biome == BiomeType.Grassland || biome == BiomeType.Forest))
-        {
-            int flowerCount = Random.Range(5, 15);
-            SpawnObjects(flowerPrefabs, flowerCount, chunkX, chunkY, biome, container, spawnedPositions, 0.3f);
-        }
-    }
-    
-    // Spawn objects với kiểm tra khoảng cách
-    private void SpawnObjects(GameObject[] prefabs, int count, long chunkX, long chunkY, 
-        BiomeType biome, Transform container, List<Vector3> spawnedPositions, float minDistance)
-    {
-        if (prefabs == null || prefabs.Length == 0) return;
-        
-        int attempts = 0;
-        int spawned = 0;
-        int maxAttempts = count * 10; // Giới hạn số lần thử
-        
-        while (spawned < count && attempts < maxAttempts)
-        {
-            attempts++;
-            
-            // Random position trong chunk
-            float x = Random.Range(5f, chunkSize - 5f);
-            float z = Random.Range(5f, chunkSize - 5f);
-            
-            // Lấy height tại vị trí này
-            float y = GetAdvancedHeightAt(x, z, chunkX, chunkY, biome);
-            Vector3 spawnPos = new Vector3(x, y, z);
-            
-            // Kiểm tra khoảng cách với các objects đã spawn
-            bool tooClose = false;
-            foreach (Vector3 existingPos in spawnedPositions)
-            {
-                if (Vector3.Distance(spawnPos, existingPos) < minDistance)
-                {
-                    tooClose = true;
-                    break;
-                }
-            }
-            
-            if (!tooClose)
-            {
-                // Chọn random prefab
-                GameObject prefab = prefabs[Random.Range(0, prefabs.Length)];
-                if (prefab != null)
-                {
-                    GameObject obj = Instantiate(prefab, spawnPos, Quaternion.identity, container);
-                    obj.transform.localRotation = Quaternion.Euler(0, Random.Range(0f, 360f), 0);
-                    
-                    // Random scale variation
-                    float scale = Random.Range(0.8f, 1.2f);
-                    obj.transform.localScale = Vector3.one * scale;
-                    
-                    spawnedPositions.Add(spawnPos);
-                    spawned++;
-                }
-            }
-        }
-    }
-    
-    // Lấy số lượng objects dựa trên biome
-    private int GetObjectCountForBiome(BiomeType biome, int baseCount, bool isVegetation)
-    {
-        float multiplier = 1f;
-        
-        switch (biome)
-        {
-            case BiomeType.Forest:
-                multiplier = isVegetation ? 2f : 0.5f;
-                break;
-            case BiomeType.Grassland:
-                multiplier = isVegetation ? 1.5f : 1f;
-                break;
-            case BiomeType.Desert:
-                multiplier = isVegetation ? 0.2f : 1.5f;
-                break;
-            case BiomeType.Mountain:
-            case BiomeType.Snow:
-                multiplier = isVegetation ? 0.1f : 2f;
-                break;
-            case BiomeType.Ocean:
-            case BiomeType.Beach:
-                multiplier = 0f;
-                break;
-            case BiomeType.Swamp:
-                multiplier = isVegetation ? 1.2f : 0.8f;
-                break;
-        }
-        
-        return Mathf.RoundToInt(baseCount * multiplier);
-    }
-    
-    // Public methods để truy cập thông tin
-    public Vector2Int GetCurrentChunk()
-    {
-        return new Vector2Int((int)currentChunkX, (int)currentChunkY);
-    }
-    
-    public long GetCurrentChunkX() => currentChunkX;
-    public long GetCurrentChunkY() => currentChunkY;
-    
-    public int GetChunkSize() => chunkSize;
-    
-    public void SetSeed(int newSeed)
-    {
-        seed = newSeed;
-        Random.InitState(seed);
-        
-        // Reload tất cả chunks với seed mới
-        foreach (var chunk in loadedChunks.Values)
-        {
-            if (chunk.chunkObject != null)
-            {
-                Destroy(chunk.chunkObject);
-            }
-        }
-        loadedChunks.Clear();
-        chunkSpawnedObjects.Clear();
+        if (player == null) return;
+        Vector3 playerPos = player.position;
+        int pX = Mathf.FloorToInt(playerPos.x / chunkSize);
+        int pZ = Mathf.FloorToInt(playerPos.z / chunkSize);
+        currentChunkCoord = new Vector2Int(pX, pZ);
         UpdateChunks();
     }
-    
-    void OnDrawGizmos()
+
+    private void UnloadChunk(Vector2Int coord)
     {
-        // Vẽ gizmos để visualize chunks trong editor
-        if (Application.isPlaying && loadedChunks != null)
+        if (loadedChunks.TryGetValue(coord, out ChunkData data))
         {
-            Gizmos.color = Color.yellow;
-            foreach (var chunk in loadedChunks.Values)
+            if (data.treeBuffer != null) data.treeBuffer.Release();
+            if (data.rockBuffer != null) data.rockBuffer.Release();
+            if (data.grassBuffer != null) data.grassBuffer.Release();
+            
+            if (data.gameObject != null) Destroy(data.gameObject);
+            loadedChunks.Remove(coord);
+        }
+    }
+
+    private void CreateChunk(Vector2Int coord)
+    {
+        if (terrainComputeShader == null) return;
+
+        GameObject chunkObj = new GameObject($"Chunk_{coord.x}_{coord.y}");
+        chunkObj.transform.position = new Vector3(coord.x * chunkSize, 0, coord.y * chunkSize);
+        chunkObj.transform.parent = transform;
+        // Terrain needs to be on a layer?
+        chunkObj.layer = LayerMask.NameToLayer("Default");
+
+        ChunkData data = new ChunkData
+        {
+            gameObject = chunkObj,
+            isReady = false
+        };
+        loadedChunks[coord] = data;
+
+        // Run Generation
+        GenerateChunkGPU(coord, data);
+    }
+
+    private void GenerateChunkGPU(Vector2Int coord, ChunkData data)
+    {
+        int kernelHeight = terrainComputeShader.FindKernel("GenerateHeightmap");
+        int kernelNormal = terrainComputeShader.FindKernel("CalculateNormals");
+        int kernelMesh = terrainComputeShader.FindKernel("GenerateMesh");
+        int kernelVeg = terrainComputeShader.FindKernel("PlaceVegetation");
+
+        // Buffers
+        int vertCount = resolution * resolution;
+        
+        RenderTexture heightMap = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.RFloat);
+        heightMap.enableRandomWrite = true;
+        heightMap.Create();
+        
+        RenderTexture biomeMap = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.ARGBFloat);
+        biomeMap.enableRandomWrite = true;
+        biomeMap.Create();
+
+        ComputeBuffer vertBuffer = new ComputeBuffer(vertCount, sizeof(float) * 3);
+        ComputeBuffer uvBuffer = new ComputeBuffer(vertCount, sizeof(float) * 2);
+        ComputeBuffer normalBuffer = new ComputeBuffer(vertCount, sizeof(float) * 3);
+        ComputeBuffer triBuffer = new ComputeBuffer((resolution - 1) * (resolution - 1) * 6, sizeof(int));
+        ComputeBuffer vegBuffer = new ComputeBuffer(20000, 32, ComputeBufferType.Append); // Increased max
+        vegBuffer.SetCounterValue(0);
+
+        // Set Parameters
+        terrainComputeShader.SetFloat("chunkX", coord.x);
+        terrainComputeShader.SetFloat("chunkY", coord.y);
+        terrainComputeShader.SetFloat("chunkSize", chunkSize);
+        terrainComputeShader.SetInt("resolution", resolution);
+        terrainComputeShader.SetFloat("heightMultiplier", heightMultiplier);
+        terrainComputeShader.SetFloat("noiseScale", noiseScale);
+        terrainComputeShader.SetInt("octaves", octaves);
+        terrainComputeShader.SetFloat("persistence", persistence);
+        terrainComputeShader.SetFloat("lacunarity", lacunarity);
+        terrainComputeShader.SetFloat("seed", seed);
+        terrainComputeShader.SetFloat("moistureNoiseScale", 0.002f);
+        terrainComputeShader.SetFloat("temperatureNoiseScale", 0.003f);
+
+        // Dispatch Geometry
+        terrainComputeShader.SetTexture(kernelHeight, "HeightMap", heightMap);
+        terrainComputeShader.SetTexture(kernelHeight, "BiomeMap", biomeMap);
+        terrainComputeShader.Dispatch(kernelHeight, Mathf.CeilToInt(resolution / 8f), Mathf.CeilToInt(resolution / 8f), 1);
+
+        terrainComputeShader.SetTexture(kernelNormal, "HeightMap", heightMap);
+        terrainComputeShader.SetBuffer(kernelNormal, "Normals", normalBuffer);
+        terrainComputeShader.Dispatch(kernelNormal, Mathf.CeilToInt(resolution / 8f), Mathf.CeilToInt(resolution / 8f), 1);
+
+        terrainComputeShader.SetTexture(kernelMesh, "HeightMap", heightMap);
+        terrainComputeShader.SetBuffer(kernelMesh, "Vertices", vertBuffer);
+        terrainComputeShader.SetBuffer(kernelMesh, "UVs", uvBuffer);
+        terrainComputeShader.SetBuffer(kernelMesh, "Triangles", triBuffer);
+        terrainComputeShader.Dispatch(kernelMesh, Mathf.CeilToInt(resolution / 8f), Mathf.CeilToInt(resolution / 8f), 1);
+
+        // Vegetation
+        terrainComputeShader.SetTexture(kernelVeg, "HeightMap", heightMap);
+        terrainComputeShader.SetTexture(kernelVeg, "BiomeMap", biomeMap);
+        terrainComputeShader.SetBuffer(kernelVeg, "Normals", normalBuffer);
+        terrainComputeShader.SetBuffer(kernelVeg, "Vertices", vertBuffer);
+        terrainComputeShader.SetBuffer(kernelVeg, "VegetationBuffer", vegBuffer);
+        terrainComputeShader.Dispatch(kernelVeg, Mathf.CeilToInt(resolution / 8f), Mathf.CeilToInt(resolution / 8f), 1);
+
+        // Readback Mesh Data (Blocking for stability)
+        Vector3[] vertices = new Vector3[vertCount];
+        vertBuffer.GetData(vertices);
+        
+        Vector2[] uvs = new Vector2[vertCount];
+        uvBuffer.GetData(uvs);
+        
+        Vector3[] normals = new Vector3[vertCount];
+        normalBuffer.GetData(normals);
+        
+        int[] triangles = new int[(resolution - 1) * (resolution - 1) * 6];
+        triBuffer.GetData(triangles);
+
+        // Apply to Mesh
+        Mesh mesh = new Mesh();
+        // Since we are using 65k+ vertices likely (129*129 = 16k, safe), for higher res use IndexFormat.UInt32
+        if (vertCount > 65535) mesh.indexFormat = IndexFormat.UInt32;
+        
+        mesh.vertices = vertices;
+        mesh.uv = uvs;
+        mesh.normals = normals;
+        mesh.triangles = triangles;
+        mesh.RecalculateBounds();
+        
+        MeshFilter mf = data.gameObject.AddComponent<MeshFilter>();
+        MeshRenderer mr = data.gameObject.AddComponent<MeshRenderer>();
+        MeshCollider mc = data.gameObject.AddComponent<MeshCollider>();
+        
+        mf.mesh = mesh;
+        mr.material = terrainMaterial;
+        mc.sharedMesh = mesh;
+
+        // Process Vegetation
+        ComputeBuffer countBuffer = new ComputeBuffer(1, sizeof(int), ComputeBufferType.IndirectArguments);
+        int[] countArr = new int[1] { 0 };
+        ComputeBuffer.CopyCount(vegBuffer, countBuffer, 0);
+        countBuffer.GetData(countArr);
+        int totalVeg = countArr[0];
+        
+        if (totalVeg > 0)
+        {
+             GpuTerrainData.VegetationInstance[] allVeg = new GpuTerrainData.VegetationInstance[totalVeg];
+             vegBuffer.GetData(allVeg, 0, 0, totalVeg);
+             
+             // Filter by type
+             var trees = allVeg.Where(v => v.typeID == 0).ToArray();
+             var rocks = allVeg.Where(v => v.typeID == 1).ToArray();
+             var grasses = allVeg.Where(v => v.typeID == 2).ToArray();
+             
+             if (trees.Length > 0)
+             {
+                 data.treeCount = trees.Length;
+                 data.treeBuffer = new ComputeBuffer(trees.Length, 32);
+                 data.treeBuffer.SetData(trees);
+             }
+             
+             if (rocks.Length > 0)
+             {
+                 data.rockCount = rocks.Length;
+                 data.rockBuffer = new ComputeBuffer(rocks.Length, 32);
+                 data.rockBuffer.SetData(rocks);
+             }
+             
+             if (grasses.Length > 0)
+             {
+                 data.grassCount = grasses.Length;
+                 data.grassBuffer = new ComputeBuffer(grasses.Length, 32);
+                 data.grassBuffer.SetData(grasses);
+             }
+        }
+
+        // Cleanup
+        heightMap.Release();
+        biomeMap.Release();
+        vertBuffer.Release();
+        uvBuffer.Release();
+        normalBuffer.Release();
+        triBuffer.Release();
+        vegBuffer.Release();
+        countBuffer.Release();
+        
+        data.isReady = true;
+    }
+
+    private void RenderVegetation()
+    {
+        if (foliageMaterial == null) return;
+        
+        // Initialize args buffers if needed
+        if (argsBufferTree == null) argsBufferTree = new ComputeBuffer(1, args.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
+        if (argsBufferRock == null) argsBufferRock = new ComputeBuffer(1, args.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
+        if (argsBufferGrass == null) argsBufferGrass = new ComputeBuffer(1, args.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
+
+        foreach (var kvp in loadedChunks)
+        {
+            ChunkData data = kvp.Value;
+            if (!data.isReady) continue;
+            
+            // Draw Trees
+            if (data.treeCount > 0 && treeMesh != null)
             {
-                if (chunk.chunkObject != null)
-                {
-                    Vector3 center = chunk.worldPosition + new Vector3(chunkSize / 2f, 0, chunkSize / 2f);
-                    Gizmos.DrawWireCube(center, new Vector3(chunkSize, 1, chunkSize));
-                }
+                foliageMaterial.SetBuffer("vegetationBuffer", data.treeBuffer);
+                foliageMaterial.SetColor("_Color", new Color(0.1f, 0.4f, 0.1f)); // Dark Green
+                
+                args[0] = (uint)treeMesh.GetIndexCount(0);
+                args[1] = (uint)data.treeCount;
+                args[2] = (uint)treeMesh.GetIndexStart(0);
+                args[3] = (uint)treeMesh.GetBaseVertex(0);
+                argsBufferTree.SetData(args);
+                
+                Graphics.DrawMeshInstancedIndirect(treeMesh, 0, foliageMaterial, new Bounds(Vector3.zero, Vector3.one * 10000), argsBufferTree);
+            }
+            
+            // Draw Rocks
+            if (data.rockCount > 0 && rockMesh != null)
+            {
+                foliageMaterial.SetBuffer("vegetationBuffer", data.rockBuffer);
+                foliageMaterial.SetColor("_Color", new Color(0.5f, 0.5f, 0.5f)); // Gray
+                
+                args[0] = (uint)rockMesh.GetIndexCount(0);
+                args[1] = (uint)data.rockCount;
+                args[2] = (uint)rockMesh.GetIndexStart(0);
+                args[3] = (uint)rockMesh.GetBaseVertex(0);
+                argsBufferRock.SetData(args);
+                
+                Graphics.DrawMeshInstancedIndirect(rockMesh, 0, foliageMaterial, new Bounds(Vector3.zero, Vector3.one * 10000), argsBufferRock);
+            }
+            
+            // Draw Grass
+            if (data.grassCount > 0 && grassMesh != null)
+            {
+                foliageMaterial.SetBuffer("vegetationBuffer", data.grassBuffer);
+                foliageMaterial.SetColor("_Color", new Color(0.3f, 0.7f, 0.2f)); // Green
+                
+                args[0] = (uint)grassMesh.GetIndexCount(0);
+                args[1] = (uint)data.grassCount;
+                args[2] = (uint)grassMesh.GetIndexStart(0);
+                args[3] = (uint)grassMesh.GetBaseVertex(0);
+                argsBufferGrass.SetData(args);
+                
+                Graphics.DrawMeshInstancedIndirect(grassMesh, 0, foliageMaterial, new Bounds(Vector3.zero, Vector3.one * 10000), argsBufferGrass);
             }
         }
+    }
+
+    private void OnDestroy()
+    {
+        foreach (var kvp in loadedChunks)
+        {
+            if (kvp.Value.treeBuffer != null) kvp.Value.treeBuffer.Release();
+            if (kvp.Value.rockBuffer != null) kvp.Value.rockBuffer.Release();
+            if (kvp.Value.grassBuffer != null) kvp.Value.grassBuffer.Release();
+        }
+        if (argsBufferTree != null) argsBufferTree.Release();
+        if (argsBufferRock != null) argsBufferRock.Release();
+        if (argsBufferGrass != null) argsBufferGrass.Release();
     }
 }

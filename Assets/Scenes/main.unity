@@ -281,56 +281,6 @@ MonoBehaviour:
   cameraDistance: 9.05
   minVerticalAngle: -80
   maxVerticalAngle: 80
---- !u!1 &151907882
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 151907884}
-  - component: {fileID: 151907883}
-  m_Layer: 0
-  m_Name: setup
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &151907883
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 151907882}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: c2fe38343f836644e96daac65fe31155, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::OptimizationSetup
-  replacePlayerController: 1
-  setupOptimizedChunkSystem: 1
-  enablePerformanceMonitoring: 1
-  playerTransform: {fileID: 86797383}
-  oldChunkManager: {fileID: 953848054}
-  oldPlayerController: {fileID: 86797382}
---- !u!4 &151907884
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 151907882}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0.91258, y: -181.12646, z: 1.2794}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &953848054
 GameObject:
   m_ObjectHideFlags: 0
@@ -360,28 +310,23 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 23cb5881119bef541bf224c9a669be60, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderChunks
+  player: {fileID: 86797383}
   chunkSize: 100
   renderDistance: 6
   seed: 0
-  player: {fileID: 86797383}
-  chunkPrefab: {fileID: 0}
-  terrainResolution: 129
+  resolution: 129
   heightMultiplier: 20
   noiseScale: 0.05
   octaves: 4
   persistence: 0.5
   lacunarity: 2
-  biomeScale: 0.01
-  temperatureNoiseScale: 0.02
-  moistureNoiseScale: 0.02
-  enableObjectSpawning: 1
-  treesPerChunk: 20
-  rocksPerChunk: 15
-  grassPatchesPerChunk: 50
-  treePrefabs: []
-  rockPrefabs: []
-  grassPrefabs: []
-  flowerPrefabs: []
+  terrainComputeShader: {fileID: 0}
+  proceduralTerrainShader: {fileID: 0}
+  instancedFoliageShader: {fileID: 0}
+  treeMesh: {fileID: 0}
+  rockMesh: {fileID: 0}
+  grassMesh: {fileID: 0}
+  vegetationTexture: {fileID: 0}
 --- !u!4 &953848056
 Transform:
   m_ObjectHideFlags: 0
@@ -668,4 +613,3 @@ SceneRoots:
   - {fileID: 2129749445}
   - {fileID: 86797383}
   - {fileID: 953848056}
-  - {fileID: 151907884}
