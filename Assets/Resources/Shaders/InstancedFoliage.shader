@@ -154,6 +154,76 @@ Shader "Custom/InstancedFoliage"
             #include "Packages/com.unity.render-pipelines.universal/Shaders/ShadowCasterPass.hlsl"
             ENDHLSL
         }
+
+        Pass
+        {
+            Name "DepthOnly"
+            Tags { "LightMode" = "DepthOnly" }
+
+            ZWrite On
+            ColorMask 0
+            Cull Off
+
+            HLSLPROGRAM
+            #pragma vertex DepthOnlyVert
+            #pragma fragment DepthOnlyFrag
+            #pragma multi_compile_instancing
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+            struct Attributes
+            {
+                float4 positionOS : POSITION;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+
+            struct Varyings
+            {
+                float4 positionCS : SV_POSITION;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+
+            struct VegetationInstance
+            {
+                float3 position;
+                float3 scale;
+                float rotationY;
+                int typeID;
+            };
+
+            StructuredBuffer<VegetationInstance> _VegetationBuffer;
+
+            Varyings DepthOnlyVert(Attributes input, uint instanceID : SV_InstanceID)
+            {
+                Varyings output;
+                UNITY_SETUP_INSTANCE_ID(input);
+                UNITY_TRANSFER_INSTANCE_ID(input, output);
+
+                VegetationInstance data = _VegetationBuffer[instanceID];
+                
+                float angle = data.rotationY * 0.0174532924;
+                float c = cos(angle);
+                float s = sin(angle);
+                float3x3 rotMatrix = float3x3(
+                    c, 0, s,
+                    0, 1, 0,
+                    -s, 0, c
+                );
+                
+                float3 localPos = mul(rotMatrix, input.positionOS.xyz * data.scale);
+                float3 worldPos = localPos + data.position;
+                
+                output.positionCS = TransformWorldToHClip(worldPos);
+                return output;
+            }
+
+            half4 DepthOnlyFrag(Varyings input) : SV_Target
+            {
+                UNITY_SETUP_INSTANCE_ID(input);
+                return 0;
+            }
+            ENDHLSL
+        }
     }
     FallBack "Universal Render Pipeline/Lit"
 }

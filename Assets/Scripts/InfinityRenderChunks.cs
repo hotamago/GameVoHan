@@ -21,6 +21,8 @@ public class InfinityRenderChunks : MonoBehaviour
     [Header("Player Safety")]
     [SerializeField] private bool enableSafety = true;
     [SerializeField] private float safetyHeightOffset = 2.0f;
+    [SerializeField] private float fallThreshold = -10f; // Only reset if player falls below this
+    [SerializeField] private float maxFallDistance = 50f; // Max distance below terrain before reset
 
     [Header("Terrain Settings")]
     [SerializeField] private int resolution = 129; 
@@ -35,6 +37,24 @@ public class InfinityRenderChunks : MonoBehaviour
     [SerializeField] private float plainStrength = 0.3f;
     [SerializeField] private float erosionStrength = 0.2f;
     [SerializeField] private float domainWarpStrength = 2.0f;
+    
+    [Header("Multi-Layer Noise")]
+    [SerializeField] private float macroScale = 0.0001f;      // Large continents
+    [SerializeField] private float mesoScale = 0.001f;        // Hills and valleys
+    [SerializeField] private float microScale = 0.01f;         // Fine details
+    [SerializeField] private float macroWeight = 0.5f;
+    [SerializeField] private float mesoWeight = 0.3f;
+    [SerializeField] private float microWeight = 0.2f;
+    
+    [Header("Voronoi & Cellular")]
+    [SerializeField] private float voronoiScale = 0.005f;
+    [SerializeField] private float voronoiStrength = 0.3f;
+    [SerializeField] private float cellularScale = 0.02f;
+    [SerializeField] private float cellularStrength = 0.2f;
+    
+    [Header("Rivers & Valleys")]
+    [SerializeField] private float riverStrength = 0.5f;
+    [SerializeField] private float valleyStrength = 0.4f;
     
     [Header("GPU Resources")]
     [SerializeField] private ComputeShader terrainComputeShader;
@@ -352,6 +372,24 @@ public class InfinityRenderChunks : MonoBehaviour
         terrainComputeShader.SetFloat("plainStrength", plainStrength);
         terrainComputeShader.SetFloat("erosionStrength", erosionStrength);
         terrainComputeShader.SetFloat("domainWarpStrength", domainWarpStrength);
+        
+        // Multi-layer noise
+        terrainComputeShader.SetFloat("macroScale", macroScale);
+        terrainComputeShader.SetFloat("mesoScale", mesoScale);
+        terrainComputeShader.SetFloat("microScale", microScale);
+        terrainComputeShader.SetFloat("macroWeight", macroWeight);
+        terrainComputeShader.SetFloat("mesoWeight", mesoWeight);
+        terrainComputeShader.SetFloat("microWeight", microWeight);
+        
+        // Voronoi & Cellular
+        terrainComputeShader.SetFloat("voronoiScale", voronoiScale);
+        terrainComputeShader.SetFloat("voronoiStrength", voronoiStrength);
+        terrainComputeShader.SetFloat("cellularScale", cellularScale);
+        terrainComputeShader.SetFloat("cellularStrength", cellularStrength);
+        
+        // Rivers & Valleys
+        terrainComputeShader.SetFloat("riverStrength", riverStrength);
+        terrainComputeShader.SetFloat("valleyStrength", valleyStrength);
 
         // Dispatch
         terrainComputeShader.SetTexture(kernelHeight, "HeightMap", heightMap);
@@ -473,23 +511,51 @@ public class InfinityRenderChunks : MonoBehaviour
         args[3] = (uint)mesh.GetBaseVertex(0);
         argsBuffer.SetData(args);
         
-        Graphics.DrawMeshInstancedIndirect(mesh, 0, foliageMaterial, new Bounds(Vector3.zero, Vector3.one * 10000), argsBuffer, 0, props);
+        // Calculate proper bounds from buffer data
+        // For now, use a reasonable bound size per chunk
+        Bounds bounds = new Bounds(Vector3.zero, Vector3.one * chunkSize * 2);
+        
+        Graphics.DrawMeshInstancedIndirect(mesh, 0, foliageMaterial, bounds, argsBuffer, 0, props);
     }
     
     // CPU Noise for Safety
     private void UpdatePlayerSafety(Vector3d playerAbsPos)
     {
-        // Compute Height at local coords? No, compute height at absolute coords.
-        float terrainHeight = GetTerrainHeightCPU((float)playerAbsPos.x, (float)playerAbsPos.z);
+        if (!enableSafety) return;
         
-        if (player.position.y < terrainHeight - 1.0f)
+        // Compute Height at absolute coords
+        float terrainHeight = GetTerrainHeightCPU((float)playerAbsPos.x, (float)playerAbsPos.z);
+        float playerHeight = (float)playerAbsPos.y;
+        
+        // Only reset if player is significantly below terrain AND falling
+        float distanceBelowTerrain = terrainHeight - playerHeight;
+        
+        // Check if player is actually falling (velocity.y < 0) or already too far below
+        bool isFalling = false;
+        Rigidbody rb = player.GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            isFalling = rb.linearVelocity.y < -0.5f; // Falling with some velocity
+        }
+        
+        // Only reset if:
+        // 1. Player is below fall threshold (absolute position check)
+        // 2. AND (player is falling OR already too far below terrain)
+        // 3. AND distance below terrain exceeds max fall distance
+        if (playerHeight < fallThreshold && 
+            (isFalling || distanceBelowTerrain > maxFallDistance) &&
+            distanceBelowTerrain > 1.0f) // At least 1 unit below terrain
         {
             Vector3 newPos = player.position;
             newPos.y = terrainHeight + safetyHeightOffset;
             player.position = newPos;
             
-            Rigidbody rb = player.GetComponent<Rigidbody>();
-            if (rb != null) rb.linearVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
+            if (rb != null)
+            {
+                rb.linearVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
+            }
+            
+            Debug.Log($"Player safety reset: Was at {playerHeight:F1}, terrain at {terrainHeight:F1}");
         }
     }
 

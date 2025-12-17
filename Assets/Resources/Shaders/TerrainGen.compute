@@ -23,6 +23,24 @@ float plainStrength;
 float erosionStrength;
 float domainWarpStrength;
 
+// Multi-layer noise parameters
+float macroScale;      // Large scale features
+float mesoScale;       // Medium scale features
+float microScale;      // Small details
+float macroWeight;
+float mesoWeight;
+float microWeight;
+
+// Voronoi and cellular noise
+float voronoiScale;
+float voronoiStrength;
+float cellularScale;
+float cellularStrength;
+
+// River/valley generation
+float riverStrength;
+float valleyStrength;
+
 // --- Outputs ---
 RWTexture2D<float> HeightMap; // R channel for height
 RWTexture2D<float4> BiomeMap; // R=BiomeIndex, G=Moisture, B=Temp, A=Unused
@@ -44,6 +62,11 @@ float random(float2 st) {
     return frac(sin(dot(st.xy, float2(12.9898, 78.233))) * 43758.5453123);
 }
 
+float2 random2(float2 st) {
+    st = float2(dot(st, float2(127.1, 311.7)), dot(st, float2(269.5, 183.3)));
+    return frac(sin(st) * 43758.5453123);
+}
+
 float noise(float2 st) {
     float2 i = floor(st);
     float2 f = frac(st);
@@ -55,6 +78,25 @@ float noise(float2 st) {
     return lerp(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
 }
 
+// Improved Perlin-like noise with better gradients
+float perlinNoise(float2 st) {
+    float2 i = floor(st);
+    float2 f = frac(st);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    
+    float2 grad00 = random2(i) * 2.0 - 1.0;
+    float2 grad10 = random2(i + float2(1.0, 0.0)) * 2.0 - 1.0;
+    float2 grad01 = random2(i + float2(0.0, 1.0)) * 2.0 - 1.0;
+    float2 grad11 = random2(i + float2(1.0, 1.0)) * 2.0 - 1.0;
+    
+    float n00 = dot(grad00, f);
+    float n10 = dot(grad10, f - float2(1.0, 0.0));
+    float n01 = dot(grad01, f - float2(0.0, 1.0));
+    float n11 = dot(grad11, f - float2(1.0, 1.0));
+    
+    return lerp(lerp(n00, n10, u.x), lerp(n01, n11, u.x), u.y) * 0.5 + 0.5;
+}
+
 // Fractional Brownian Motion - multiple octaves of noise
 float fbm(float2 st, int oct, float pers, float lac) {
     float value = 0.0;
@@ -63,13 +105,64 @@ float fbm(float2 st, int oct, float pers, float lac) {
     float maxValue = 0.0;
     
     for (int i = 0; i < oct; i++) {
-        value += amplitude * noise(st * frequency);
+        value += amplitude * perlinNoise(st * frequency);
         maxValue += amplitude;
         st += float2(100.0, 100.0); // Shift to avoid artifacts
         frequency *= lac;
         amplitude *= pers;
     }
     return value / maxValue; // Normalize to 0..1
+}
+
+// Voronoi noise for interesting terrain features
+float voronoi(float2 st, float scale) {
+    st *= scale;
+    float2 i = floor(st);
+    float2 f = frac(st);
+    
+    float minDist = 8.0;
+    
+    // Check 3x3 grid around current cell
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            float2 neighbor = float2(float(x), float(y));
+            float2 cellPoint = random2(i + neighbor) + neighbor;
+            float2 diff = cellPoint - f;
+            float dist = length(diff);
+            minDist = min(minDist, dist);
+        }
+    }
+    
+    return minDist;
+}
+
+// Cellular noise (Worley noise)
+float cellularNoise(float2 st, float scale) {
+    st *= scale;
+    float2 i = floor(st);
+    float2 f = frac(st);
+    
+    float minDist1 = 8.0;
+    float minDist2 = 8.0;
+    
+    // Check 3x3 grid
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            float2 neighbor = float2(float(x), float(y));
+            float2 cellPoint = random2(i + neighbor) + neighbor;
+            float2 diff = cellPoint - f;
+            float dist = length(diff);
+            
+            if (dist < minDist1) {
+                minDist2 = minDist1;
+                minDist1 = dist;
+            } else if (dist < minDist2) {
+                minDist2 = dist;
+            }
+        }
+    }
+    
+    return minDist2 - minDist1; // F1-F2 gives interesting patterns
 }
 
 // Ridge noise for mountain peaks
@@ -80,7 +173,7 @@ float ridgeNoise(float2 st, int oct, float pers, float lac) {
     float maxValue = 0.0;
     
     for (int i = 0; i < oct; i++) {
-        float n = noise(st * frequency);
+        float n = perlinNoise(st * frequency);
         n = abs(n * 2.0 - 1.0); // Create ridges
         n = 1.0 - n; // Invert for peaks
         n = n * n; // Sharpen peaks
@@ -102,21 +195,44 @@ float2 domainWarp(float2 p, float strength) {
     return p + q * strength;
 }
 
-// Erosion simulation using simple thermal erosion
+// River/valley generation using noise
+float generateRivers(float2 worldPos) {
+    // Create river paths using noise
+    float riverNoise = fbm(worldPos * 0.001, 3, 0.5, 2.0);
+    
+    // Create winding river paths
+    float2 riverPos = worldPos * 0.0005;
+    float river1 = fbm(riverPos + float2(seed * 100.0, seed * 200.0), 4, 0.4, 2.5);
+    float river2 = fbm(riverPos + float2(seed * 300.0, seed * 400.0), 4, 0.4, 2.5);
+    
+    // Combine rivers
+    float riverMask = min(river1, river2);
+    riverMask = smoothstep(0.3, 0.5, riverMask); // Create river channels
+    
+    // Create valleys along rivers
+    float valley = 1.0 - riverMask * valleyStrength;
+    
+    return valley;
+}
+
+// Enhanced erosion simulation
 float applyErosion(float height, float2 pos, float strength) {
-    // Simple erosion based on slope
-    float2 offset = float2(0.1, 0.1);
+    // Multi-pass erosion simulation
+    float2 offset = float2(0.15, 0.15);
+    
+    // Sample surrounding heights
     float hL = fbm(pos - offset, 3, 0.5, 2.0) * heightMultiplier;
     float hR = fbm(pos + offset, 3, 0.5, 2.0) * heightMultiplier;
-    float hD = fbm(pos - float2(0.0, 0.1), 3, 0.5, 2.0) * heightMultiplier;
-    float hU = fbm(pos + float2(0.0, 0.1), 3, 0.5, 2.0) * heightMultiplier;
+    float hD = fbm(pos - float2(0.0, 0.15), 3, 0.5, 2.0) * heightMultiplier;
+    float hU = fbm(pos + float2(0.0, 0.15), 3, 0.5, 2.0) * heightMultiplier;
     
     float avgHeight = (hL + hR + hD + hU) * 0.25;
     float slope = abs(height - avgHeight);
     
-    // Erode steep slopes
-    if (slope > 5.0) {
-        height = lerp(height, avgHeight, strength * 0.1);
+    // Erode steep slopes more aggressively
+    float erosionAmount = strength * 0.15;
+    if (slope > 3.0) {
+        height = lerp(height, avgHeight, erosionAmount * (slope / 10.0));
     }
     
     return height;
@@ -128,8 +244,28 @@ float GetHeight(float2 worldPos) {
     // Apply domain warping for more natural features
     float2 warpedPos = domainWarp(noisePos, domainWarpStrength);
     
-    // Base terrain using FBM
-    float baseHeight = fbm(warpedPos, octaves, persistence, lacunarity);
+    // Multi-layer terrain generation
+    // Macro scale - large continents and landmasses
+    float macroHeight = fbm(warpedPos * macroScale, octaves, persistence, lacunarity) * macroWeight;
+    
+    // Meso scale - hills and valleys
+    float mesoHeight = fbm(warpedPos * mesoScale + float2(seed * 50.0, seed * 50.0), 5, 0.6, 2.0) * mesoWeight;
+    
+    // Micro scale - fine details
+    float microHeight = fbm(warpedPos * microScale + float2(seed * 25.0, seed * 25.0), 3, 0.7, 2.5) * microWeight;
+    
+    // Combine layers
+    float baseHeight = macroHeight + mesoHeight + microHeight;
+    baseHeight = saturate(baseHeight); // Clamp to 0-1
+    
+    // Add Voronoi features for interesting terrain
+    float voronoiFeature = voronoi(warpedPos, voronoiScale);
+    voronoiFeature = smoothstep(0.2, 0.8, voronoiFeature);
+    baseHeight += voronoiFeature * voronoiStrength * 0.3;
+    
+    // Add cellular noise for texture
+    float cellularFeature = cellularNoise(warpedPos, cellularScale);
+    baseHeight += cellularFeature * cellularStrength * 0.1;
     
     // Mountain generation using ridge noise
     float2 mountainPos = warpedPos * 0.3; // Larger scale for mountains
@@ -148,6 +284,10 @@ float GetHeight(float2 worldPos) {
     if (baseHeight < 0.3) {
         height = lerp(height, baseHeight * 0.5, plainStrength);
     }
+    
+    // Generate rivers and valleys
+    float riverValley = generateRivers(worldPos);
+    height *= riverValley; // Carve valleys
     
     // Apply erosion
     if (erosionStrength > 0.0) {
@@ -194,6 +334,9 @@ void GenerateHeightmap (uint3 id : SV_DispatchThreadID)
     // Temperature varies with height (higher = colder)
     float heightNorm = height / heightMultiplier;
     temp = lerp(temp, temp * 0.3, smoothstep(0.3, 0.9, heightNorm));
+    
+    // Moisture varies with height (valleys = more moisture)
+    moisture = lerp(moisture, moisture * 1.2, smoothstep(0.2, 0.4, 1.0 - heightNorm));
     
     float biome = GetBiome(heightNorm, moisture, temp);
 
