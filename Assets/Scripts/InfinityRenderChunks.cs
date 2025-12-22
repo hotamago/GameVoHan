@@ -21,6 +21,7 @@ public class InfinityRenderChunks : MonoBehaviour
     [Header("Player Safety")]
     [SerializeField] private bool enableSafety = true;
     [SerializeField] private float safetyHeightOffset = 2.0f;
+    [SerializeField] private float groundCheckDistance = 0.5f;
 
     [Header("Terrain Settings")]
     [SerializeField] private int resolution = 129; 
@@ -530,19 +531,40 @@ public class InfinityRenderChunks : MonoBehaviour
     // CPU Noise for Safety
     private void UpdatePlayerSafety(Vector3d playerAbsPos)
     {
-        // Get approximated height
-        float terrainHeight = GetTerrainHeightCPU((float)playerAbsPos.x, (float)playerAbsPos.z);
+        // Get ACTUAL terrain height using raycast from above
+        // Cast from high above player position down to get real terrain height
+        float raycastStartHeight = Mathf.Max(player.position.y + 100f, 200f); // Start raycast from high above
+        Vector3 raycastStart = new Vector3(player.position.x, raycastStartHeight, player.position.z);
         
-        // Relaxed threshold: -20 units below approximated terrain
-        // The approximation might be off by 5-10 units due to lack of Voronoi/Hydrid logic on CPU
-        if (player.position.y < terrainHeight - 20.0f)
+        RaycastHit hit;
+        float actualTerrainHeight = float.MinValue;
+        bool hasTerrainHit = Physics.Raycast(raycastStart, Vector3.down, out hit, 500f);
+        
+        if (hasTerrainHit)
         {
+            actualTerrainHeight = hit.point.y;
+        }
+        else
+        {
+            // Fallback to approximated height if raycast doesn't hit (terrain might not be loaded)
+            actualTerrainHeight = GetTerrainHeightCPU((float)playerAbsPos.x, (float)playerAbsPos.z);
+        }
+        
+        // Get player velocity to check if jumping
+        Rigidbody rb = player.GetComponent<Rigidbody>();
+        bool isJumping = rb != null && rb.linearVelocity.y > 2.0f; // Only consider significant upward velocity as jumping
+        
+        // Simple check: if player is below terrain by a significant amount, teleport
+        // But don't teleport if player is actively jumping (velocity up > 2)
+        float safetyThreshold = actualTerrainHeight - 15.0f;
+        
+        if (!isJumping && player.position.y < safetyThreshold)
+        {
+            // Player is below terrain and not jumping - teleport to safety
             Vector3 newPos = player.position;
-            // Respawn high up to be safe
-            newPos.y = terrainHeight + safetyHeightOffset + 10.0f; 
+            newPos.y = actualTerrainHeight + safetyHeightOffset + 5.0f; 
             player.position = newPos;
             
-            Rigidbody rb = player.GetComponent<Rigidbody>();
             if (rb != null) rb.linearVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
         }
     }

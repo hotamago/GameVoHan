@@ -149,7 +149,7 @@ Transform:
   m_GameObject: {fileID: 86797382}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 1.148, z: 0}
+  m_LocalPosition: {x: 0, y: 500, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -320,14 +320,15 @@ MonoBehaviour:
   _debugLocalPos: {x: 0, y: 0, z: 0}
   enableSafety: 1
   safetyHeightOffset: 10
+  groundCheckDistance: 0.5
   resolution: 100
-  heightMultiplier: 400
+  heightMultiplier: 500
   noiseScale: 0.02
-  octaves: 6
+  octaves: 8
   persistence: 0.5
   lacunarity: 2
-  mountainStrength: 0.4
-  plainStrength: 0.3
+  mountainStrength: 0.8
+  plainStrength: 0.6
   erosionStrength: 0.2
   domainWarpStrength: 2
   terrainComputeShader: {fileID: 0}
