@@ -1,4 +1,7 @@
 #pragma kernel GenerateHeightmap
+#pragma kernel GenerateBiomeMap
+#pragma kernel ErodeHeightmap
+#pragma kernel SmoothHeightmap
 #pragma kernel CalculateNormals
 #pragma kernel GenerateMesh
 #pragma kernel PlaceVegetation
@@ -23,6 +26,11 @@ float plainStrength;
 float erosionStrength;
 float domainWarpStrength;
 
+// Post-process parameters (GPU)
+float erosionTalus;
+float erosionAmount;
+float smoothStrength;
+
 // --- Outputs ---
 RWTexture2D<float> HeightMap; // R channel for height
 RWTexture2D<float4> BiomeMap; // R=BiomeIndex, G=Moisture, B=Temp, A=Unused
@@ -30,6 +38,10 @@ RWStructuredBuffer<float3> Vertices;
 RWStructuredBuffer<float2> UVs;
 RWStructuredBuffer<float3> Normals;
 RWStructuredBuffer<int> Triangles;
+
+// Ping-pong textures for post-process
+Texture2D<float> HeightMapIn;
+RWTexture2D<float> HeightMapOut;
 
 struct VegetationInstance {
     float3 position;
@@ -117,13 +129,31 @@ float fbm(float2 st, int oct, float pers, float lac) {
     for (int i = 0; i < oct; i++) {
         value += amplitude * noise(st * frequency);
         maxValue += amplitude;
-        st += float2(100.0, 100.0);
         frequency *= lac;
         amplitude *= pers;
     }
     return value / maxValue;
 }
 
+// Ridged FBM - smoother mountain ranges than raw voronoi inversion
+float ridgedFbm(float2 st, int oct, float pers, float lac) {
+    float value = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+    float maxValue = 0.0;
+    float prev = 1.0;
+    for (int i = 0; i < oct; i++) {
+        float n = noise(st * frequency);
+        float r = 1.0 - abs(n * 2.0 - 1.0); // ridge
+        r *= r; // sharpen ridge while keeping smooth slopes
+        value += r * amplitude * prev;
+        maxValue += amplitude;
+        prev = r;
+        frequency *= lac;
+        amplitude *= pers;
+    }
+    return value / maxValue;
+}
 
 float2 domainWarp(float2 p, float strength) {
     float2 q = float2(
@@ -133,57 +163,40 @@ float2 domainWarp(float2 p, float strength) {
     return p + q * strength;
 }
 
-float applyErosion(float height, float2 pos, float strength) {
-    float2 offset = float2(0.1, 0.1);
-    float hL = fbm(pos - offset, 3, 0.5, 2.0) * heightMultiplier;
-    float hR = fbm(pos + offset, 3, 0.5, 2.0) * heightMultiplier;
-    float avgHeight = (hL + hR) * 0.5; // Simplified for performance
-    return lerp(height, avgHeight, strength * 0.05); // Reduce erosion cost
-}
-
 float GetHeight(float2 worldPos) {
     float2 noisePos = (worldPos + float2(seed * 100.0, seed * 100.0)) * noiseScale;
-    
-    // 1. Continent Shape (Low frequency)
-    float continents = fbm(noisePos * 0.1, 3, 0.5, 2.0);
-    
-    // 2. Mountain Spines (Voronoi)
-    // Invert voronoi for cells
-    float cellular = 1.0 - voronoi(noisePos * 1.5 + domainWarp(noisePos, 0.5)); 
-    
-    // 3. Detail Detail (Hybrid Multi)
-    float details = hybridMultifractal(noisePos, octaves, 0.8, lacunarity); // H=0.8 for smooth-ish fractal
-    
-    // Mix
-    float height = 0.0;
-    
-    // Blend logic
-    if (continents < 0.3) {
-        // Ocean/Beach - smooth
-        height = continents * 0.8; 
+
+    // Domain warp: use user parameter, but scale to noise-space (defaults in inspector are in "human" range)
+    float warp = domainWarpStrength * 0.25;
+    float2 p = domainWarp(noisePos, warp);
+
+    // 1) Continents / macro shape
+    float continents = fbm(p * 0.10, 4, 0.5, 2.0);
+
+    // 2) Hills (signed, subtle)
+    float hills = fbm(p * 0.85, max(3, octaves - 1), persistence, lacunarity);
+    float hillsSigned = (hills * 2.0 - 1.0) * 0.18; // [-0.18..0.18]
+
+    // 3) Mountains (ridged)
+    float ridges = ridgedFbm(p * 1.65, min(octaves, 6), 0.5, 2.0);
+
+    float height01 = 0.0;
+
+    // Ocean / beach band is kept close to old thresholds for biome consistency
+    if (continents < 0.30) {
+        height01 = continents * 0.80;
     } else {
-        // Land
-        float landFactor = smoothstep(0.3, 0.4, continents);
-        
-        // Base land
-        height = continents;
-        
-        // Add mountains based on mountain strength + voronoi cells
-        float mtn = cellular * details * mountainStrength * 3.0; // Boosted
-        
-        // Only add mountains in "Highlands"
-        if (continents > 0.6) {
-             height += mtn * smoothstep(0.6, 0.7, continents);
-        } else {
-             // Plains/Hills - mix some details
-             height += details * plainStrength;
-        }
+        float landMask = smoothstep(0.30, 0.40, continents);
+        float mtnMask = smoothstep(0.58, 0.80, continents);
+
+        height01 = continents;
+        height01 += landMask * (hillsSigned * plainStrength);
+        height01 += ridges * mtnMask * mountainStrength * 0.90;
     }
-    
-    // Normalize? No, just clamp mostly or let it fly.
-    // Domain warp the whole thing for river-like offsets? Done inside voronoi.
-    
-    return height * heightMultiplier;
+
+    // Clamp to keep biome thresholds stable and prevent rare blow-ups into spikes
+    height01 = saturate(height01);
+    return height01 * heightMultiplier;
 }
 
 // Enhanced biome system
@@ -214,19 +227,79 @@ void GenerateHeightmap (uint3 id : SV_DispatchThreadID)
     float2 worldPos = float2(chunkX * chunkSize, chunkY * chunkSize) + localPos;
 
     float height = GetHeight(worldPos);
-    
-    // Moisture & Temp noise with better distribution
+
+    HeightMap[id.xy] = height;
+}
+
+[numthreads(8, 8, 1)]
+void GenerateBiomeMap (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
+
+    float step = chunkSize / (float)(resolution - 1);
+    float2 localPos = float2(id.x * step, id.y * step);
+    float2 worldPos = float2(chunkX * chunkSize, chunkY * chunkSize) + localPos;
+
+    float height = HeightMap[id.xy];
+
+    // Moisture & Temp noise
     float moisture = fbm((worldPos + seed * 500.0) * moistureNoiseScale, 4, 0.5, 2.0);
     float temp = fbm((worldPos + seed * 800.0) * temperatureNoiseScale, 4, 0.5, 2.0);
-    
+
     // Temperature varies with height (higher = colder)
     float heightNorm = height / heightMultiplier;
     temp = lerp(temp, temp * 0.3, smoothstep(0.3, 0.9, heightNorm));
-    
-    float biome = GetBiome(heightNorm, moisture, temp);
 
-    HeightMap[id.xy] = height;
+    float biome = GetBiome(heightNorm, moisture, temp);
     BiomeMap[id.xy] = float4(biome, moisture, temp, 0.0);
+}
+
+[numthreads(8, 8, 1)]
+void ErodeHeightmap (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
+
+    int2 p = int2(id.x, id.y);
+
+    // Use Load for Texture2D input
+    float hC = HeightMapIn.Load(int3(p, 0));
+    float hL = HeightMapIn.Load(int3(int2(max(p.x - 1, 0), p.y), 0));
+    float hR = HeightMapIn.Load(int3(int2(min(p.x + 1, resolution - 1), p.y), 0));
+    float hD = HeightMapIn.Load(int3(int2(p.x, max(p.y - 1, 0)), 0));
+    float hU = HeightMapIn.Load(int3(int2(p.x, min(p.y + 1, resolution - 1)), 0));
+
+    // Anisotropic diffusion: smooth steep slopes much more than flat areas
+    float grad = max(max(abs(hC - hL), abs(hC - hR)), max(abs(hC - hD), abs(hC - hU)));
+    float lap = (hL + hR + hD + hU) - 4.0 * hC;
+
+    float mask = saturate((grad - erosionTalus) / max(erosionTalus, 1e-4));
+    float hN = hC + lap * (erosionAmount * mask);
+
+    HeightMapOut[p] = max(0.0, hN);
+}
+
+[numthreads(8, 8, 1)]
+void SmoothHeightmap (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
+    int2 p = int2(id.x, id.y);
+
+    // 3x3 gaussian-ish blur
+    float sum = 0.0;
+    float wsum = 0.0;
+    for (int oy = -1; oy <= 1; oy++)
+    {
+        for (int ox = -1; ox <= 1; ox++)
+        {
+            int2 q = int2(clamp(p.x + ox, 0, resolution - 1), clamp(p.y + oy, 0, resolution - 1));
+            float w = (ox == 0 && oy == 0) ? 4.0 : ((ox == 0 || oy == 0) ? 2.0 : 1.0);
+            sum += HeightMapIn.Load(int3(q, 0)) * w;
+            wsum += w;
+        }
+    }
+    float blurred = sum / wsum;
+    float hC = HeightMapIn.Load(int3(p, 0));
+    HeightMapOut[p] = lerp(hC, blurred, saturate(smoothStrength));
 }
 
 [numthreads(8, 8, 1)]

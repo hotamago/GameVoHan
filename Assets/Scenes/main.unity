@@ -262,7 +262,7 @@ Rigidbody:
   m_IsKinematic: 0
   m_Interpolate: 0
   m_Constraints: 80
-  m_CollisionDetection: 0
+  m_CollisionDetection: 1
 --- !u!114 &86797388
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -311,19 +311,19 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderChunks
   player: {fileID: 86797383}
-  chunkSize: 100
-  renderDistance: 2
+  chunkSize: 1000
+  renderDistance: 1
   seed: 0
-  floatingOriginThreshold: 100
+  floatingOriginThreshold: 1000
   current_x: 0
   current_y: 0
   _debugLocalPos: {x: 0, y: 0, z: 0}
   enableSafety: 1
   safetyHeightOffset: 10
-  resolution: 200
-  heightMultiplier: 20
-  noiseScale: 0.05
-  octaves: 4
+  resolution: 100
+  heightMultiplier: 400
+  noiseScale: 0.02
+  octaves: 6
   persistence: 0.5
   lacunarity: 2
   mountainStrength: 0.4
@@ -457,7 +457,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a79441f348de89743a2939f4d699eac1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Unity.RenderPipelines.Universal.Runtime::UnityEngine.Rendering.Universal.UniversalAdditionalCameraData
-  m_RenderShadows: 1
+  m_RenderShadows: 0
   m_RequiresDepthTextureOption: 2
   m_RequiresOpaqueTextureOption: 2
   m_CameraType: 0
@@ -468,7 +468,7 @@ MonoBehaviour:
     m_Bits: 1
   m_VolumeTrigger: {fileID: 0}
   m_VolumeFrameworkUpdateModeOption: 2
-  m_RenderPostProcessing: 0
+  m_RenderPostProcessing: 1
   m_Antialiasing: 0
   m_AntialiasingQuality: 2
   m_StopNaN: 0

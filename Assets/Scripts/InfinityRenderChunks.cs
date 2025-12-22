@@ -300,6 +300,9 @@ public class InfinityRenderChunks : MonoBehaviour
         // No virtual offsets needed, cx/cy ARE the virtual offsets.
         
         int kernelHeight = terrainComputeShader.FindKernel("GenerateHeightmap");
+        int kernelErode = terrainComputeShader.FindKernel("ErodeHeightmap");
+        int kernelSmooth = terrainComputeShader.FindKernel("SmoothHeightmap");
+        int kernelBiome = terrainComputeShader.FindKernel("GenerateBiomeMap");
         int kernelNormal = terrainComputeShader.FindKernel("CalculateNormals");
         int kernelMesh = terrainComputeShader.FindKernel("GenerateMesh");
         int kernelVeg = terrainComputeShader.FindKernel("PlaceVegetation");
@@ -307,9 +310,14 @@ public class InfinityRenderChunks : MonoBehaviour
         // Buffers
         int vertCount = resolution * resolution;
         
-        RenderTexture heightMap = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.RFloat);
-        heightMap.enableRandomWrite = true;
-        heightMap.Create();
+        // Heightmap ping-pong for post process (erosion/smoothing) - avoids read/write hazards
+        RenderTexture heightMapA = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.RFloat);
+        heightMapA.enableRandomWrite = true;
+        heightMapA.Create();
+
+        RenderTexture heightMapB = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.RFloat);
+        heightMapB.enableRandomWrite = true;
+        heightMapB.Create();
         
         RenderTexture biomeMap = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.ARGBFloat);
         biomeMap.enableRandomWrite = true;
@@ -353,27 +361,69 @@ public class InfinityRenderChunks : MonoBehaviour
         terrainComputeShader.SetFloat("erosionStrength", erosionStrength);
         terrainComputeShader.SetFloat("domainWarpStrength", domainWarpStrength);
 
+        // Post-process tuning: drive iterations/thresholds from erosionStrength so user doesn't need new knobs
+        int erosionIterations = Mathf.RoundToInt(Mathf.Lerp(0f, 12f, Mathf.Clamp01(erosionStrength)));
+        int smoothIterations = Mathf.RoundToInt(Mathf.Lerp(0f, 2f, Mathf.Clamp01(erosionStrength)));
+        float talus = Mathf.Lerp(heightMultiplier * 0.02f, heightMultiplier * 0.004f, Mathf.Clamp01(erosionStrength));
+        float amount = Mathf.Lerp(0f, 0.35f, Mathf.Clamp01(erosionStrength));
+        float smooth = Mathf.Lerp(0f, 0.65f, Mathf.Clamp01(erosionStrength));
+        terrainComputeShader.SetFloat("erosionTalus", talus);
+        terrainComputeShader.SetFloat("erosionAmount", amount);
+        terrainComputeShader.SetFloat("smoothStrength", smooth);
+
         // Dispatch
-        terrainComputeShader.SetTexture(kernelHeight, "HeightMap", heightMap);
-        terrainComputeShader.SetTexture(kernelHeight, "BiomeMap", biomeMap);
-        terrainComputeShader.Dispatch(kernelHeight, Mathf.CeilToInt(resolution / 8f), Mathf.CeilToInt(resolution / 8f), 1);
+        int groups = Mathf.CeilToInt(resolution / 8f);
 
-        terrainComputeShader.SetTexture(kernelNormal, "HeightMap", heightMap);
+        // 1) Height
+        terrainComputeShader.SetTexture(kernelHeight, "HeightMap", heightMapA);
+        terrainComputeShader.Dispatch(kernelHeight, groups, groups, 1);
+
+        // 2) Erosion (ping-pong)
+        RenderTexture src = heightMapA;
+        RenderTexture dst = heightMapB;
+        for (int i = 0; i < erosionIterations; i++)
+        {
+            terrainComputeShader.SetTexture(kernelErode, "HeightMapIn", src);
+            terrainComputeShader.SetTexture(kernelErode, "HeightMapOut", dst);
+            terrainComputeShader.Dispatch(kernelErode, groups, groups, 1);
+            RenderTexture tmp = src;
+            src = dst;
+            dst = tmp;
+        }
+
+        // 3) Small blur to remove remaining needle peaks while preserving features
+        for (int i = 0; i < smoothIterations; i++)
+        {
+            terrainComputeShader.SetTexture(kernelSmooth, "HeightMapIn", src);
+            terrainComputeShader.SetTexture(kernelSmooth, "HeightMapOut", dst);
+            terrainComputeShader.Dispatch(kernelSmooth, groups, groups, 1);
+            RenderTexture tmp = src;
+            src = dst;
+            dst = tmp;
+        }
+
+        // 4) Biome map from final height
+        terrainComputeShader.SetTexture(kernelBiome, "HeightMap", src);
+        terrainComputeShader.SetTexture(kernelBiome, "BiomeMap", biomeMap);
+        terrainComputeShader.Dispatch(kernelBiome, groups, groups, 1);
+
+        // 5) Normals/Mesh/Veg from final height
+        terrainComputeShader.SetTexture(kernelNormal, "HeightMap", src);
         terrainComputeShader.SetBuffer(kernelNormal, "Normals", normalBuffer);
-        terrainComputeShader.Dispatch(kernelNormal, Mathf.CeilToInt(resolution / 8f), Mathf.CeilToInt(resolution / 8f), 1);
+        terrainComputeShader.Dispatch(kernelNormal, groups, groups, 1);
 
-        terrainComputeShader.SetTexture(kernelMesh, "HeightMap", heightMap);
+        terrainComputeShader.SetTexture(kernelMesh, "HeightMap", src);
         terrainComputeShader.SetBuffer(kernelMesh, "Vertices", vertBuffer);
         terrainComputeShader.SetBuffer(kernelMesh, "UVs", uvBuffer);
         terrainComputeShader.SetBuffer(kernelMesh, "Triangles", triBuffer);
-        terrainComputeShader.Dispatch(kernelMesh, Mathf.CeilToInt(resolution / 8f), Mathf.CeilToInt(resolution / 8f), 1);
+        terrainComputeShader.Dispatch(kernelMesh, groups, groups, 1);
 
-        terrainComputeShader.SetTexture(kernelVeg, "HeightMap", heightMap);
+        terrainComputeShader.SetTexture(kernelVeg, "HeightMap", src);
         terrainComputeShader.SetTexture(kernelVeg, "BiomeMap", biomeMap);
         terrainComputeShader.SetBuffer(kernelVeg, "Normals", normalBuffer);
         terrainComputeShader.SetBuffer(kernelVeg, "Vertices", vertBuffer);
         terrainComputeShader.SetBuffer(kernelVeg, "VegetationBuffer", vegBuffer);
-        terrainComputeShader.Dispatch(kernelVeg, Mathf.CeilToInt(resolution / 8f), Mathf.CeilToInt(resolution / 8f), 1);
+        terrainComputeShader.Dispatch(kernelVeg, groups, groups, 1);
 
         // Readback
         Vector3[] vertices = new Vector3[vertCount];
@@ -427,7 +477,8 @@ public class InfinityRenderChunks : MonoBehaviour
              if (grasses.Length > 0) { data.grassCount = grasses.Length; data.grassBuffer = new ComputeBuffer(grasses.Length, 32); data.grassBuffer.SetData(grasses); }
         }
 
-        heightMap.Release();
+        heightMapA.Release();
+        heightMapB.Release();
         biomeMap.Release();
         vertBuffer.Release();
         uvBuffer.Release();
