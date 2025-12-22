@@ -1,7 +1,6 @@
 using UnityEngine;
 using UnityEngine.Rendering;
 using System.Collections.Generic;
-using System.Linq;
 using System;
 
 public class InfinityRenderChunks : MonoBehaviour
@@ -469,13 +468,42 @@ public class InfinityRenderChunks : MonoBehaviour
              GpuTerrainData.VegetationInstance[] allVeg = new GpuTerrainData.VegetationInstance[totalVeg];
              vegBuffer.GetData(allVeg, 0, 0, totalVeg);
              
-             var trees = allVeg.Where(v => v.typeID == 0).ToArray();
-             var rocks = allVeg.Where(v => v.typeID == 1).ToArray();
-             var grasses = allVeg.Where(v => v.typeID == 2).ToArray();
+             // Optimized manual filtering (faster than LINQ, avoids allocation overhead)
+             // Pre-allocate lists with estimated capacity
+             List<GpuTerrainData.VegetationInstance> treesList = new List<GpuTerrainData.VegetationInstance>(totalVeg / 3);
+             List<GpuTerrainData.VegetationInstance> rocksList = new List<GpuTerrainData.VegetationInstance>(totalVeg / 3);
+             List<GpuTerrainData.VegetationInstance> grassesList = new List<GpuTerrainData.VegetationInstance>(totalVeg / 3);
              
-             if (trees.Length > 0) { data.treeCount = trees.Length; data.treeBuffer = new ComputeBuffer(trees.Length, 32); data.treeBuffer.SetData(trees); }
-             if (rocks.Length > 0) { data.rockCount = rocks.Length; data.rockBuffer = new ComputeBuffer(rocks.Length, 32); data.rockBuffer.SetData(rocks); }
-             if (grasses.Length > 0) { data.grassCount = grasses.Length; data.grassBuffer = new ComputeBuffer(grasses.Length, 32); data.grassBuffer.SetData(grasses); }
+             // Single pass filtering - much faster than multiple LINQ Where() calls
+             for (int i = 0; i < allVeg.Length; i++)
+             {
+                 var veg = allVeg[i];
+                 switch (veg.typeID)
+                 {
+                     case 0: treesList.Add(veg); break;
+                     case 1: rocksList.Add(veg); break;
+                     case 2: grassesList.Add(veg); break;
+                 }
+             }
+             
+             if (treesList.Count > 0) 
+             { 
+                 data.treeCount = treesList.Count; 
+                 data.treeBuffer = new ComputeBuffer(treesList.Count, 32); 
+                 data.treeBuffer.SetData(treesList); 
+             }
+             if (rocksList.Count > 0) 
+             { 
+                 data.rockCount = rocksList.Count; 
+                 data.rockBuffer = new ComputeBuffer(rocksList.Count, 32); 
+                 data.rockBuffer.SetData(rocksList); 
+             }
+             if (grassesList.Count > 0) 
+             { 
+                 data.grassCount = grassesList.Count; 
+                 data.grassBuffer = new ComputeBuffer(grassesList.Count, 32); 
+                 data.grassBuffer.SetData(grassesList); 
+             }
         }
 
         heightMapA.Release();
@@ -571,6 +599,7 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private float GetTerrainHeightCPU(float worldX, float worldZ)
     {
+        // Burst-optimized version - uses SIMD instructions for much better performance
         // Simplified CPU version of the Shader Logic
         // We only calculate the BASE FBM to get a "floor" estimate.
         // GPU adds mountains/ridges on top, so the real terrain is usually HIGHER than this.
@@ -583,57 +612,15 @@ public class InfinityRenderChunks : MonoBehaviour
         // So under-estimating height is SAFE for a "fall prevention" check. 
         // Checks might be LATE, but never EARLY (Resetting while walking).
         
-        Vector2 worldPos = new Vector2(worldX, worldZ);
-        Vector2 noisePos = (worldPos + new Vector2(seed * 100.0f, seed * 100.0f)) * noiseScale;
-        
-        float continents = Fbm(noisePos * 0.1f, 3, 0.5f, 2.0f);
-        
-        float height = 0;
-        if (continents < 0.3f) height = continents * 0.8f;
-        else height = continents;
-        
-        // Add a small buffer for mountains approximation without expensive calls
-        if (continents > 0.6f) height += 0.2f * mountainStrength; 
-        
-        return height * heightMultiplier;
+        return TerrainNoiseBurst.GetTerrainHeight(
+            worldX, 
+            worldZ, 
+            noiseScale, 
+            heightMultiplier, 
+            mountainStrength, 
+            seed
+        );
     }
-    
-    private float Fbm(Vector2 st, int oct, float pers, float lac)
-    {
-        float value = 0.0f;
-        float amplitude = 0.5f;
-        float frequency = 1.0f;
-        float maxValue = 0.0f;
-
-        for (int i = 0; i < oct; i++)
-        {
-            value += amplitude * Noise(st * frequency);
-            maxValue += amplitude;
-            st += new Vector2(100.0f, 100.0f);
-            frequency *= lac;
-            amplitude *= pers;
-        }
-        return value / maxValue;
-    }
-
-    private float Noise(Vector2 st)
-    {
-        Vector2 i = new Vector2(Mathf.Floor(st.x), Mathf.Floor(st.y));
-        Vector2 f = new Vector2(st.x - i.x, st.y - i.y);
-        float a = RandomNoise(i);
-        float b = RandomNoise(i + new Vector2(1.0f, 0.0f));
-        float c = RandomNoise(i + new Vector2(0.0f, 1.0f));
-        float d = RandomNoise(i + new Vector2(1.0f, 1.0f));
-        Vector2 u = new Vector2(f.x * f.x * (3.0f - 2.0f * f.x), f.y * f.y * (3.0f - 2.0f * f.y));
-        return Mathf.Lerp(a, b, u.x) + (c - a) * u.y * (1.0f - u.x) + (d - b) * u.x * u.y;
-    }
-    
-    private float RandomNoise(Vector2 st)
-    {
-        return Frac(Mathf.Sin(Vector2.Dot(st, new Vector2(12.9898f, 78.233f))) * 43758.5453123f);
-    }
-    
-    private float Frac(float v) { return v - Mathf.Floor(v); }
 
     private void OnDestroy()
     {
