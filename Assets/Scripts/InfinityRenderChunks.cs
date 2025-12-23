@@ -36,12 +36,23 @@ public class InfinityRenderChunks : MonoBehaviour
     [SerializeField] private float recoverBelowTerrain = 5.0f;
 
     [Header("Terrain Settings")]
-    [SerializeField] private int resolution = 129; 
+    [Tooltip("Base (highest) resolution. For LOD to work correctly this MUST be 2^n+1 (e.g. 129, 257, 513).")]
+    [SerializeField] private int resolution = 129; // Base (highest) resolution. LOD uses this as the sampling grid.
     [SerializeField] private float heightMultiplier = 30f;
     [SerializeField] private float noiseScale = 0.005f;
     [SerializeField] private int octaves = 6;
     [SerializeField] private float persistence = 0.5f;
     [SerializeField] private float lacunarity = 2f;
+
+    [Header("Terrain LOD")]
+    [Tooltip("Enable chunk LOD: far chunks use lower mesh/heightmap resolution to reduce cost.")]
+    [SerializeField] private bool enableLod = true;
+    [Tooltip("Chunk distance (Chebyshev: max(|dx|,|dy|)) thresholds per LOD level. Must match 'lodResolutions' length.")]
+    [SerializeField] private int[] lodChunkRadii = new int[] { 1, 2, 4, 999 };
+    [Tooltip("Mesh/heightmap resolution per LOD level (must be 2^n+1 and (resolution-1) must be divisible by (lodRes-1)). Example: 129,65,33,17,9.")]
+    [SerializeField] private int[] lodResolutions = new int[] { 129, 65, 33, 17 };
+    [Tooltip("Optional: add a downward skirt on chunk borders to hide tiny cracks from LOD T-junctions. 0 disables.")]
+    [SerializeField] private float skirtDepth = 0f;
     
     [Header("Advanced Terrain")]
     [SerializeField] private float mountainStrength = 0.4f;
@@ -77,6 +88,7 @@ public class InfinityRenderChunks : MonoBehaviour
     {
         public GameObject gameObject;
         public bool isReady;
+        public int lodResolution;
     }
 
     private long _runtimeChunkX;
@@ -247,6 +259,180 @@ public class InfinityRenderChunks : MonoBehaviour
             TeleportToChunk(current_x, current_y);
         }
     }
+
+    private static bool IsPow2(int v) => (v > 0) && ((v & (v - 1)) == 0);
+
+    private static int SnapBaseResolution(int res, bool snapUp)
+    {
+        // We require res = 2^n + 1 so that (res-1) is power-of-two, enabling clean LOD divisors.
+        res = Mathf.Clamp(res, 9, 2049);
+        if ((res & 1) == 0) res += 1; // keep odd
+        int baseVerts = Mathf.Max(1, res - 1);
+        if (IsPow2(baseVerts)) return res;
+
+        // Snap to nearest (or up/down) 2^n+1 based on baseVerts.
+        int p = 1;
+        while (p < baseVerts && p < (1 << 30)) p <<= 1;
+        int up = p + 1;
+        int down = (p >> 1) + 1;
+        if (down < 9) down = 9;
+        if (up > 2049) up = 2049;
+
+        return snapUp ? up : down;
+    }
+
+    private void RebuildLodArraysToMatchBase()
+    {
+        if (lodChunkRadii == null || lodChunkRadii.Length == 0) lodChunkRadii = new int[] { 1, 2, 4, 999 };
+
+        // Build: res, res/2, res/4, ... until 9 (all are 2^n+1 when base is 2^n+1).
+        List<int> list = new List<int>(8);
+        int r = resolution;
+        while (r >= 9)
+        {
+            list.Add(r);
+            int verts = r - 1;
+            if (verts <= 8) break;
+            r = (verts / 2) + 1;
+        }
+        lodResolutions = list.ToArray();
+
+        // Ensure radii length matches resolutions length (keep last as "catch-all")
+        if (lodChunkRadii.Length != lodResolutions.Length)
+        {
+            int[] newR = new int[lodResolutions.Length];
+            for (int i = 0; i < newR.Length; i++)
+            {
+                newR[i] = (i < lodChunkRadii.Length) ? lodChunkRadii[i] : (i == newR.Length - 1 ? 999 : (i + 1));
+            }
+            lodChunkRadii = newR;
+        }
+    }
+
+    // ---- Editor / validation helpers (used by a CustomEditor) ----
+    public bool IsLodConfigValid(out string error)
+    {
+        if (!enableLod)
+        {
+            error = null;
+            return true;
+        }
+
+        if (resolution < 9)
+        {
+            error = "resolution must be >= 9.";
+            return false;
+        }
+
+        int baseVerts = resolution - 1;
+        if (!IsPow2(baseVerts))
+        {
+            error = $"Base resolution invalid for LOD: resolution-1 must be power-of-two. Current resolution={resolution} => baseVerts={baseVerts}. Use 2^n+1 (e.g. 129, 257, 513).";
+            return false;
+        }
+
+        if (lodResolutions == null || lodResolutions.Length == 0)
+        {
+            error = "lodResolutions is empty.";
+            return false;
+        }
+
+        if (lodChunkRadii == null || lodChunkRadii.Length == 0)
+        {
+            error = "lodChunkRadii is empty.";
+            return false;
+        }
+
+        int levels = Mathf.Min(lodChunkRadii.Length, lodResolutions.Length);
+        if (levels < 1)
+        {
+            error = "LOD arrays must have at least 1 level.";
+            return false;
+        }
+
+        for (int i = 0; i < levels; i++)
+        {
+            int r = lodResolutions[i];
+            if (r < 9 || r > resolution)
+            {
+                error = $"lodResolutions[{i}]={r} must be in [9..resolution].";
+                return false;
+            }
+            if ((r & 1) == 0)
+            {
+                error = $"lodResolutions[{i}]={r} must be odd (2^n+1).";
+                return false;
+            }
+            int v = r - 1;
+            if (!IsPow2(v))
+            {
+                error = $"lodResolutions[{i}]={r} invalid: (lodRes-1) must be power-of-two.";
+                return false;
+            }
+            if (baseVerts % v != 0)
+            {
+                error = $"lodResolutions[{i}]={r} invalid: (resolution-1)={baseVerts} must be divisible by (lodRes-1)={v}.";
+                return false;
+            }
+        }
+
+        error = null;
+        return true;
+    }
+
+    public void FixLodConfig(bool snapUp)
+    {
+        resolution = SnapBaseResolution(resolution, snapUp);
+        RebuildLodArraysToMatchBase();
+    }
+
+    private static int ClampLongToInt(long v)
+    {
+        if (v > int.MaxValue) return int.MaxValue;
+        if (v < int.MinValue) return int.MinValue;
+        return (int)v;
+    }
+
+    private int GetLodResolutionForChunkDelta(int dx, int dy)
+    {
+        if (!enableLod || lodChunkRadii == null || lodResolutions == null) return resolution;
+
+        int r = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy)); // Chebyshev distance in chunks
+        int levels = Mathf.Min(lodChunkRadii.Length, lodResolutions.Length);
+        for (int i = 0; i < levels; i++)
+        {
+            if (r <= lodChunkRadii[i])
+            {
+                return ValidateLodResolution(lodResolutions[i]);
+            }
+        }
+
+        return ValidateLodResolution(lodResolutions[levels - 1]);
+    }
+
+    private int ValidateLodResolution(int lodRes)
+    {
+        // Must be odd and (lodRes-1) power-of-two for best alignment, and must divide base grid (resolution-1).
+        lodRes = Mathf.Clamp(lodRes, 9, resolution);
+        if ((lodRes & 1) == 0) lodRes += 1;
+
+        int baseVerts = Mathf.Max(1, resolution - 1);
+        int lodVerts = Mathf.Max(1, lodRes - 1);
+
+        // Enforce (resolution-1) % (lodRes-1) == 0; if not, snap down to the nearest valid 2^n+1.
+        if (baseVerts % lodVerts != 0 || !IsPow2(lodVerts))
+        {
+            // Find largest power-of-two divisor of baseVerts that is <= lodVerts.
+            int best = 8;
+            for (int p = 8; p <= baseVerts; p <<= 1)
+            {
+                if (p <= lodVerts && (baseVerts % p == 0)) best = p;
+            }
+            lodRes = best + 1;
+        }
+
+        return lodRes;
+    }
     
     private void InitializeMaterials()
     {
@@ -376,6 +562,24 @@ public class InfinityRenderChunks : MonoBehaviour
                 long cy = long.Parse(parts[1]);
                 CreateChunk(cx, cy, key);
             }
+            else
+            {
+                // LOD update (regenerate chunk mesh if desired LOD changed)
+                string[] parts = key.Split('_');
+                long cx = long.Parse(parts[0]);
+                long cy = long.Parse(parts[1]);
+                int dx = ClampLongToInt(cx - centerChunkX);
+                int dy = ClampLongToInt(cy - centerChunkY);
+                int desiredRes = GetLodResolutionForChunkDelta(dx, dy);
+
+                if (loadedChunks.TryGetValue(key, out ChunkData existing) && existing != null)
+                {
+                    if (existing.lodResolution != desiredRes)
+                    {
+                        GenerateChunkGPU(cx, cy, existing, desiredRes);
+                    }
+                }
+            }
         }
     }
     
@@ -494,11 +698,20 @@ public class InfinityRenderChunks : MonoBehaviour
         ChunkData data = new ChunkData { gameObject = chunkObj, isReady = false };
         loadedChunks[key] = data;
 
-        GenerateChunkGPU(cx, cy, data);
+        // Determine initial LOD based on current center chunk.
+        int centerDx = ClampLongToInt(cx - _runtimeChunkX);
+        int centerDy = ClampLongToInt(cy - _runtimeChunkY);
+        int lodRes = GetLodResolutionForChunkDelta(centerDx, centerDy);
+
+        GenerateChunkGPU(cx, cy, data, lodRes);
     }
 
-    private void GenerateChunkGPU(long cx, long cy, ChunkData data)
+    private void GenerateChunkGPU(long cx, long cy, ChunkData data, int lodResolution)
     {
+        lodResolution = ValidateLodResolution(lodResolution);
+        data.isReady = false;
+        data.lodResolution = lodResolution;
+
         // Noise Generation uses Absolute Coordinates (cx, cy) directly!
         // No virtual offsets needed, cx/cy ARE the virtual offsets.
         
@@ -521,25 +734,25 @@ public class InfinityRenderChunks : MonoBehaviour
         }
         
         // Buffers
-        int vertCount = resolution * resolution;
+        int vertCount = lodResolution * lodResolution;
         
         // Heightmap ping-pong for post process (erosion/smoothing) - avoids read/write hazards
-        RenderTexture heightMapA = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.RFloat);
+        RenderTexture heightMapA = new RenderTexture(lodResolution, lodResolution, 0, RenderTextureFormat.RFloat);
         heightMapA.enableRandomWrite = true;
         heightMapA.Create();
 
-        RenderTexture heightMapB = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.RFloat);
+        RenderTexture heightMapB = new RenderTexture(lodResolution, lodResolution, 0, RenderTextureFormat.RFloat);
         heightMapB.enableRandomWrite = true;
         heightMapB.Create();
         
-        RenderTexture biomeMap = new RenderTexture(resolution, resolution, 0, RenderTextureFormat.ARGBFloat);
+        RenderTexture biomeMap = new RenderTexture(lodResolution, lodResolution, 0, RenderTextureFormat.ARGBFloat);
         biomeMap.enableRandomWrite = true;
         biomeMap.Create();
 
         ComputeBuffer vertBuffer = new ComputeBuffer(vertCount, sizeof(float) * 3);
         ComputeBuffer uvBuffer = new ComputeBuffer(vertCount, sizeof(float) * 2);
         ComputeBuffer normalBuffer = new ComputeBuffer(vertCount, sizeof(float) * 3);
-        ComputeBuffer triBuffer = new ComputeBuffer((resolution - 1) * (resolution - 1) * 6, sizeof(int));
+        ComputeBuffer triBuffer = new ComputeBuffer((lodResolution - 1) * (lodResolution - 1) * 6, sizeof(int));
 
         // Parameters - Pass doubles as floats? 
         // Compute shader only supports float. 
@@ -556,7 +769,8 @@ public class InfinityRenderChunks : MonoBehaviour
         // Let's rely on standard float behavior for now, it's "Infinite" enough for most games.
         
         terrainComputeShader.SetFloat("chunkSize", chunkSize);
-        terrainComputeShader.SetInt("resolution", resolution);
+        terrainComputeShader.SetInt("resolution", lodResolution);
+        terrainComputeShader.SetInt("baseVertsPerChunk", Mathf.Max(1, resolution - 1));
         terrainComputeShader.SetFloat("heightMultiplier", heightMultiplier);
         terrainComputeShader.SetInt("octaves", octaves);
         terrainComputeShader.SetFloat("persistence", persistence);
@@ -585,7 +799,7 @@ public class InfinityRenderChunks : MonoBehaviour
         terrainComputeShader.SetFloat("smoothStrength", smooth);
 
         // Dispatch
-        int groups = Mathf.CeilToInt(resolution / 8f);
+        int groups = Mathf.CeilToInt(lodResolution / 8f);
 
         try
         {
@@ -643,7 +857,7 @@ public class InfinityRenderChunks : MonoBehaviour
             Vector3[] normals = new Vector3[vertCount];
             normalBuffer.GetData(normals);
             
-            int[] triangles = new int[(resolution - 1) * (resolution - 1) * 6];
+            int[] triangles = new int[(lodResolution - 1) * (lodResolution - 1) * 6];
             triBuffer.GetData(triangles);
 
             // Validate GPU output to avoid spamming Mesh errors if a kernel failed to dispatch/compile
@@ -676,9 +890,18 @@ public class InfinityRenderChunks : MonoBehaviour
             mesh.triangles = triangles;
             mesh.RecalculateBounds();
             
-            MeshFilter mf = data.gameObject.AddComponent<MeshFilter>();
-            MeshRenderer mr = data.gameObject.AddComponent<MeshRenderer>();
-            MeshCollider mc = data.gameObject.AddComponent<MeshCollider>();
+            // Optional skirt to hide tiny cracks from LOD T-junctions (doesn't fix true height discontinuities).
+            if (skirtDepth > 0.001f)
+            {
+                AddSkirt(ref mesh, lodResolution, skirtDepth);
+            }
+
+            MeshFilter mf = data.gameObject.GetComponent<MeshFilter>();
+            if (mf == null) mf = data.gameObject.AddComponent<MeshFilter>();
+            MeshRenderer mr = data.gameObject.GetComponent<MeshRenderer>();
+            if (mr == null) mr = data.gameObject.AddComponent<MeshRenderer>();
+            MeshCollider mc = data.gameObject.GetComponent<MeshCollider>();
+            if (mc == null) mc = data.gameObject.AddComponent<MeshCollider>();
             
             mf.mesh = mesh;
             mr.material = terrainMaterial;
@@ -699,6 +922,79 @@ public class InfinityRenderChunks : MonoBehaviour
             normalBuffer.Release();
             triBuffer.Release();
         }
+    }
+
+    private void AddSkirt(ref Mesh mesh, int res, float depth)
+    {
+        // Duplicate border vertices and push them down to create a vertical "skirt".
+        // This hides sub-pixel cracks caused by LOD T-junctions and rasterization.
+        // Border count: top+bottom+left+right, without double-counting corners => 4*(res-1)
+        if (mesh == null || res < 3) return;
+
+        Vector3[] v = mesh.vertices;
+        Vector2[] uv = mesh.uv;
+        Vector3[] n = mesh.normals;
+        int[] t = mesh.triangles;
+
+        int borderCount = 4 * (res - 1);
+        int baseVertCount = v.Length;
+        Vector3[] v2 = new Vector3[baseVertCount + borderCount];
+        Vector2[] uv2 = new Vector2[uv.Length + borderCount];
+        Vector3[] n2 = new Vector3[n.Length + borderCount];
+        Array.Copy(v, v2, baseVertCount);
+        Array.Copy(uv, uv2, uv.Length);
+        Array.Copy(n, n2, n.Length);
+
+        // Build border index list in clockwise order.
+        int[] border = new int[borderCount];
+        int k = 0;
+        // bottom row (z=0): x 0..res-2
+        for (int x = 0; x < res - 1; x++) border[k++] = x;
+        // right col (x=res-1): z 0..res-2
+        for (int z = 0; z < res - 1; z++) border[k++] = (res - 1) + z * res;
+        // top row (z=res-1): x res-1..1
+        for (int x = res - 1; x > 0; x--) border[k++] = x + (res - 1) * res;
+        // left col (x=0): z res-1..1
+        for (int z = res - 1; z > 0; z--) border[k++] = z * res;
+
+        // Add skirt verts
+        for (int i = 0; i < borderCount; i++)
+        {
+            int src = border[i];
+            int dst = baseVertCount + i;
+            Vector3 p = v[src];
+            p.y -= Mathf.Abs(depth);
+            v2[dst] = p;
+            uv2[dst] = uv[src];
+            n2[dst] = n[src];
+        }
+
+        // Add triangles: for each border edge, connect top border vertex to its skirt copy.
+        int extraTris = borderCount * 6;
+        int[] t2 = new int[t.Length + extraTris];
+        Array.Copy(t, t2, t.Length);
+        int ti = t.Length;
+        for (int i = 0; i < borderCount; i++)
+        {
+            int next = (i + 1) % borderCount;
+            int a = border[i];
+            int b = border[next];
+            int a2i = baseVertCount + i;
+            int b2i = baseVertCount + next;
+            // Two triangles (a, b, b2) and (a, b2, a2)
+            t2[ti++] = a;
+            t2[ti++] = b;
+            t2[ti++] = b2i;
+            t2[ti++] = a;
+            t2[ti++] = b2i;
+            t2[ti++] = a2i;
+        }
+
+        mesh.vertices = v2;
+        mesh.uv = uv2;
+        mesh.normals = n2;
+        mesh.triangles = t2;
+        mesh.RecalculateBounds();
     }
     
     // CPU Noise for Safety
@@ -805,8 +1101,8 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private float GetTerrainHeightCPU(long chunkX, long chunkY, float inChunkX, float inChunkZ)
     {
-        // Match the shader's integer vertex-grid space (approximation).
-        int vertsPerChunk = resolution - 1;
+        // Match the shader's integer base vertex-grid space (approximation).
+        int vertsPerChunk = Mathf.Max(1, resolution - 1);
         float stepWorld = chunkSize / (float)vertsPerChunk;
 
         int vx = Mathf.Clamp(Mathf.RoundToInt(inChunkX / stepWorld), 0, vertsPerChunk);

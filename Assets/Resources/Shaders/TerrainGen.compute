@@ -14,6 +14,9 @@ uint chunkYLo;
 uint chunkYHi;
 float chunkSize;
 int resolution;
+// Base vertex-grid size (resolution-1) for *noise sampling*.
+// This must stay constant across LODs so chunk borders match even when mesh resolution changes.
+int baseVertsPerChunk;
 float heightMultiplier;
 int octaves;
 float persistence;
@@ -264,13 +267,19 @@ void GenerateHeightmap (uint3 id : SV_DispatchThreadID)
     if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
 
     // Build a global *integer* vertex-grid coordinate:
-    // gridX = chunkX * (resolution-1) + id.x
-    // gridZ = chunkY * (resolution-1) + id.y
+    // IMPORTANT (LOD): 'resolution' can change per chunk. If we used (resolution-1) here,
+    // then LOD would rescale noise sampling and create huge discontinuities at chunk borders.
+    // So we map the local [0..resolution-1] vertex index into a fixed base grid [0..baseVertsPerChunk].
     uint2 chunkX64 = uint2(chunkXLo, chunkXHi);
     uint2 chunkY64 = uint2(chunkYLo, chunkYHi);
-    uint vertsPerChunk = (uint)(resolution - 1);
-    uint2 gx = AddU64_U32(MulU64_U32(chunkX64, vertsPerChunk), id.x);
-    uint2 gz = AddU64_U32(MulU64_U32(chunkY64, vertsPerChunk), id.y);
+    uint lodVertsPerChunk = (uint)(resolution - 1);
+    // Map id -> base grid index using integer math. Ensures:
+    // id=0 => 0, id=lodVertsPerChunk => baseVertsPerChunk
+    uint b = (uint)max(1, baseVertsPerChunk);
+    uint mx = (lodVertsPerChunk == 0u) ? 0u : (id.x * b) / lodVertsPerChunk;
+    uint mz = (lodVertsPerChunk == 0u) ? 0u : (id.y * b) / lodVertsPerChunk;
+    uint2 gx = AddU64_U32(MulU64_U32(chunkX64, b), mx);
+    uint2 gz = AddU64_U32(MulU64_U32(chunkY64, b), mz);
 
     float height = GetHeightFromGrid(gx, gz);
 
@@ -287,9 +296,12 @@ void GenerateBiomeMap (uint3 id : SV_DispatchThreadID)
     // Moisture & Temp noise
     uint2 chunkX64 = uint2(chunkXLo, chunkXHi);
     uint2 chunkY64 = uint2(chunkYLo, chunkYHi);
-    uint vertsPerChunk = (uint)(resolution - 1);
-    uint2 gx = AddU64_U32(MulU64_U32(chunkX64, vertsPerChunk), id.x);
-    uint2 gz = AddU64_U32(MulU64_U32(chunkY64, vertsPerChunk), id.y);
+    uint lodVertsPerChunk = (uint)(resolution - 1);
+    uint b = (uint)max(1, baseVertsPerChunk);
+    uint mx = (lodVertsPerChunk == 0u) ? 0u : (id.x * b) / lodVertsPerChunk;
+    uint mz = (lodVertsPerChunk == 0u) ? 0u : (id.y * b) / lodVertsPerChunk;
+    uint2 gx = AddU64_U32(MulU64_U32(chunkX64, b), mx);
+    uint2 gz = AddU64_U32(MulU64_U32(chunkY64, b), mz);
 
     uint sm = Hash32((uint)seed ^ 0x3C6EF372u);
     uint st = Hash32((uint)seed ^ 0xBB67AE85u);
