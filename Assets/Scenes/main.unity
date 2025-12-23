@@ -366,7 +366,7 @@ MonoBehaviour:
   seed: 8386
   floatingOriginThreshold: 100
   useManualPosition: 1
-  autoTeleportOnManualChange: 0
+  autoTeleportOnManualChange: 1
   current_x: 3455345435
   current_y: 94589271034
   _debugLocalPos: {x: 0, y: 0, z: 0}
@@ -464,7 +464,7 @@ Camera:
     width: 1
     height: 1
   near clip plane: 0.3
-  far clip plane: 2000
+  far clip plane: 1000
   field of view: 90
   orthographic: 0
   orthographic size: 5

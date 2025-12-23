@@ -13,10 +13,7 @@ public class InfinityRenderChunks : MonoBehaviour
     [SerializeField] private float floatingOriginThreshold = 500f;
 
     [Header("Current Position")]
-    [Tooltip("Enable to manually control current_x and current_y. When enabled, Update() won't overwrite these values.")]
-    [SerializeField] private bool useManualPosition = false;
-    [Tooltip("When useManualPosition is enabled, changing current_x/current_y will auto-teleport the virtual world so the target chunk renders near the player.")]
-    [SerializeField] private bool autoTeleportOnManualChange = true;
+    [Tooltip("Realtime absolute chunk coordinate (64-bit). You can also edit these in Inspector during Play Mode to teleport.")]
     public long current_x;
     public long current_y;
     
@@ -58,20 +55,13 @@ public class InfinityRenderChunks : MonoBehaviour
     // We use string keys "X_Y" for long coordinates support
     private Dictionary<string, ChunkData> loadedChunks = new Dictionary<string, ChunkData>();
     private Material terrainMaterial;
-    
-    // Total amount the world has been shifted.
-    // Real World Pos = Local Pos + cumulativeWorldOffset
-    private Vector3d cumulativeWorldOffset = Vector3d.zero;
-    
-    // Double precision vector for accurate world tracking
-    private struct Vector3d
-    {
-        public double x, y, z;
-        public static Vector3d zero => new Vector3d(0,0,0);
-        public Vector3d(double x, double y, double z) { this.x = x; this.y = y; this.z = z; }
-        public static Vector3d operator +(Vector3d a, Vector3d b) => new Vector3d(a.x+b.x, a.y+b.y, a.z+b.z);
-        public static Vector3d operator +(Vector3d a, Vector3 b) => new Vector3d(a.x+b.x, a.y+b.y, a.z+b.z);
-    }
+
+    // Native "long + float" world tracking:
+    // - worldChunkOriginX/Y: absolute chunk coordinate for local chunk 0_0.
+    // - Unity Transforms stay small (float) to avoid farland.
+    // - Absolute world location is expressed as (worldChunkOrigin + localChunk) in long.
+    private long worldChunkOriginX = 0;
+    private long worldChunkOriginY = 0;
 
     private class ChunkData
     {
@@ -79,9 +69,8 @@ public class InfinityRenderChunks : MonoBehaviour
         public bool isReady;
     }
 
-    private long _lastManualX;
-    private long _lastManualY;
-    private bool _hadManualApplied;
+    private long _runtimeChunkX;
+    private long _runtimeChunkY;
 
     private static void SetLongAsUInt2(ComputeShader cs, string loName, string hiName, long value)
     {
@@ -142,7 +131,21 @@ public class InfinityRenderChunks : MonoBehaviour
             return;
         }
         
-        UpdateChunksImmediate();
+        // Allow setting a starting chunk from Inspector (current_x/current_y).
+        // During gameplay these are still realtime values.
+        TeleportToChunk(current_x, current_y);
+    }
+
+    private void OnValidate()
+    {
+        // Let the user edit current_x/current_y in Inspector while playing to teleport instantly.
+        if (!Application.isPlaying) return;
+        if (player == null) return;
+
+        if (current_x != _runtimeChunkX || current_y != _runtimeChunkY)
+        {
+            TeleportToChunk(current_x, current_y);
+        }
     }
     
     private void InitializeMaterials()
@@ -186,62 +189,43 @@ public class InfinityRenderChunks : MonoBehaviour
     {
         if (player == null) return;
 
-        // Manual positioning: when user edits current_x/current_y, optionally teleport so it actually renders near the player.
-        if (useManualPosition && autoTeleportOnManualChange)
-        {
-            if (!_hadManualApplied || _lastManualX != current_x || _lastManualY != current_y)
-            {
-                _lastManualX = current_x;
-                _lastManualY = current_y;
-                _hadManualApplied = true;
-
-                TeleportToChunk(current_x, current_y);
-                // TeleportToChunk already calls UpdateChunksImmediate(). We can skip the rest of this frame.
-                return;
-            }
-        }
-        else
-        {
-            _hadManualApplied = false;
-        }
-
         // 1. World Shift Check
         if (Mathf.Abs(player.position.x) > floatingOriginThreshold || Mathf.Abs(player.position.z) > floatingOriginThreshold)
         {
             ShiftWorldOrigin();
         }
 
-        // 2. Calculate Absolute Grid Coordinate
-        // AbsPos = cumulativeOffset + localPos
-        Vector3d playerAbsPos = cumulativeWorldOffset + player.position;
+        // 2. Calculate Absolute Chunk Coordinate (native long + float local)
+        int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
+        int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
+        long pX = worldChunkOriginX + localChunkX;
+        long pZ = worldChunkOriginY + localChunkY;
+
+        float inChunkX = player.position.x - (localChunkX * chunkSize);
+        float inChunkZ = player.position.z - (localChunkY * chunkSize);
         
-        long pX = (long)Math.Floor(playerAbsPos.x / chunkSize);
-        long pZ = (long)Math.Floor(playerAbsPos.z / chunkSize);
-        
-        // Update current position only if not using manual control
-        if (!useManualPosition)
-        {
-            current_x = pX;
-            current_y = pZ;
-        }
+        // Realtime current chunk (always)
+        _runtimeChunkX = pX;
+        _runtimeChunkY = pZ;
+        current_x = pX;
+        current_y = pZ;
         _debugLocalPos = player.position;
 
         // 3. Update Chunks if changed
-        // If autoTeleportOnManualChange is enabled, we still stream chunks around the *player* after teleport,
-        // so walking continues to work normally (current_x/current_y are treated as the teleport target).
-        // If autoTeleportOnManualChange is disabled, we stream around current_x/current_y directly.
-        long chunkX = (useManualPosition && !autoTeleportOnManualChange) ? current_x : pX;
-        long chunkY = (useManualPosition && !autoTeleportOnManualChange) ? current_y : pZ;
-        UpdateChunks(chunkX, chunkY);
+        UpdateChunks(pX, pZ);
         
         // 4. Safety
-        if (enableSafety) UpdatePlayerSafety(playerAbsPos);
+        if (enableSafety) UpdatePlayerSafety(pX, pZ, inChunkX, inChunkZ);
     }
     
     private void ShiftWorldOrigin()
     {
-        Vector3 shift = player.position;
-        shift.y = 0; // Keep Y local
+        // Shift by whole chunks so origin stays chunk-aligned (no doubles needed).
+        int dxChunks = Mathf.FloorToInt(player.position.x / chunkSize);
+        int dzChunks = Mathf.FloorToInt(player.position.z / chunkSize);
+        if (dxChunks == 0 && dzChunks == 0) return;
+
+        Vector3 shift = new Vector3(dxChunks * chunkSize, 0, dzChunks * chunkSize);
         
         // Shift Player
         player.position -= shift;
@@ -252,10 +236,10 @@ public class InfinityRenderChunks : MonoBehaviour
             if (kvp.Value.gameObject != null)
                 kvp.Value.gameObject.transform.position -= shift;
         }
-        
-        // Update Global Offset
-        cumulativeWorldOffset = cumulativeWorldOffset + shift;
-        Debug.Log($"World Shifted: {shift}. New Origin: {cumulativeWorldOffset.x}, {cumulativeWorldOffset.z}");
+
+        // Update absolute chunk origin (native long)
+        worldChunkOriginX += dxChunks;
+        worldChunkOriginY += dzChunks;
     }
 
     private void UpdateChunks(long centerChunkX, long centerChunkY)
@@ -298,21 +282,17 @@ public class InfinityRenderChunks : MonoBehaviour
     private void UpdateChunksImmediate()
     {
         if (player == null) return;
-        Vector3d playerAbsPos = cumulativeWorldOffset + player.position;
-        long pX = (long)Math.Floor(playerAbsPos.x / chunkSize);
-        long pZ = (long)Math.Floor(playerAbsPos.z / chunkSize);
+        int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
+        int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
+        long pX = worldChunkOriginX + localChunkX;
+        long pZ = worldChunkOriginY + localChunkY;
         
-        // Update current position only if not using manual control
-        if (!useManualPosition)
-        {
-            current_x = pX; 
-            current_y = pZ;
-        }
+        _runtimeChunkX = pX;
+        _runtimeChunkY = pZ;
+        current_x = pX; 
+        current_y = pZ;
         
-        // Use manual position if enabled, otherwise use calculated position
-        long chunkX = (useManualPosition && !autoTeleportOnManualChange) ? current_x : pX;
-        long chunkY = (useManualPosition && !autoTeleportOnManualChange) ? current_y : pZ;
-        UpdateChunks(chunkX, chunkY);
+        UpdateChunks(pX, pZ);
     }
 
     private void ClearAllChunks()
@@ -335,12 +315,11 @@ public class InfinityRenderChunks : MonoBehaviour
         // Reset terrain around new location
         ClearAllChunks();
 
-        // Keep local player position the same, but change the absolute (virtual) position by adjusting offset.
-        // AbsPos = cumulativeWorldOffset + localPos
-        // We want floor(AbsPos/chunkSize) == targetChunk
-        double targetAbsX = (double)targetChunkX * chunkSize;
-        double targetAbsZ = (double)targetChunkY * chunkSize;
-        cumulativeWorldOffset = new Vector3d(targetAbsX - player.position.x, 0.0, targetAbsZ - player.position.z);
+        // Native long+float teleport: set the chunk-origin so current local chunk becomes the target.
+        int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
+        int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
+        worldChunkOriginX = targetChunkX - localChunkX;
+        worldChunkOriginY = targetChunkY - localChunkY;
 
         // Keep debug/current fields aligned
         current_x = targetChunkX;
@@ -402,20 +381,11 @@ public class InfinityRenderChunks : MonoBehaviour
 
         GameObject chunkObj = new GameObject($"Chunk_{cx}_{cy}");
         
-        // Calculate Local Position logic
-        // LocalPos = AbsPos - Offset
-        // AbsChunkPos = cx * size
-        // Offset = cumulativeWorldOffset
-        
-        // We need doubles here for precision before casting to float local pos
-        double worldPosX = cx * chunkSize;
-        double worldPosZ = cy * chunkSize;
-        
-        Vector3 localPos = new Vector3(
-            (float)(worldPosX - cumulativeWorldOffset.x),
-            0,
-            (float)(worldPosZ - cumulativeWorldOffset.z)
-        );
+        // Local position is based on relative chunk delta from the chunk-origin.
+        // Delta is always small (renderDistance) so floats are safe.
+        long relX = cx - worldChunkOriginX;
+        long relY = cy - worldChunkOriginY;
+        Vector3 localPos = new Vector3(relX * chunkSize, 0, relY * chunkSize);
         
         chunkObj.transform.position = localPos;
         chunkObj.transform.parent = transform;
@@ -632,7 +602,7 @@ public class InfinityRenderChunks : MonoBehaviour
     }
     
     // CPU Noise for Safety
-    private void UpdatePlayerSafety(Vector3d playerAbsPos)
+    private void UpdatePlayerSafety(long playerChunkX, long playerChunkY, float inChunkX, float inChunkZ)
     {
         // Get ACTUAL terrain height using raycast from above
         // Cast from high above player position down to get real terrain height
@@ -650,7 +620,7 @@ public class InfinityRenderChunks : MonoBehaviour
         else
         {
             // Fallback to approximated height if raycast doesn't hit (terrain might not be loaded)
-            actualTerrainHeight = GetTerrainHeightCPU(playerAbsPos.x, playerAbsPos.z);
+            actualTerrainHeight = GetTerrainHeightCPU(playerChunkX, playerChunkY, inChunkX, inChunkZ);
         }
         
         // Get player velocity to check if jumping
@@ -744,15 +714,17 @@ public class InfinityRenderChunks : MonoBehaviour
         return value / Mathf.Max(maxValue, 1e-6f);
     }
 
-    private float GetTerrainHeightCPU(double worldX, double worldZ)
+    private float GetTerrainHeightCPU(long chunkX, long chunkY, float inChunkX, float inChunkZ)
     {
         // Match the shader's integer vertex-grid space (approximation).
-        double stepWorld = chunkSize / (double)(resolution - 1);
-        long gxI = (long)Math.Round(worldX / stepWorld);
-        long gzI = (long)Math.Round(worldZ / stepWorld);
+        int vertsPerChunk = resolution - 1;
+        float stepWorld = chunkSize / (float)vertsPerChunk;
 
-        ulong gx = unchecked((ulong)gxI);
-        ulong gz = unchecked((ulong)gzI);
+        int vx = Mathf.Clamp(Mathf.RoundToInt(inChunkX / stepWorld), 0, vertsPerChunk);
+        int vz = Mathf.Clamp(Mathf.RoundToInt(inChunkZ / stepWorld), 0, vertsPerChunk);
+
+        ulong gx = unchecked((ulong)chunkX) * (ulong)vertsPerChunk + (ulong)vx;
+        ulong gz = unchecked((ulong)chunkY) * (ulong)vertsPerChunk + (ulong)vz;
 
         uint s0 = Hash32((uint)seed ^ 0xA341316Cu);
         float continents = Fbm64(gx, gz, ComputeNoiseShift(noiseScale) + 4, 3, 0.5f, s0);
