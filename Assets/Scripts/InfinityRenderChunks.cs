@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using System.Collections.Generic;
 using System;
+using System.Collections;
 
 public class InfinityRenderChunks : MonoBehaviour
 {
@@ -20,10 +21,19 @@ public class InfinityRenderChunks : MonoBehaviour
     [Header("Debug Info")]
     [SerializeField] private Vector3 _debugLocalPos;
 
+    [Header("Player Spawn")]
+    [SerializeField] private bool autoPlacePlayerOnStart = true;
+    [Tooltip("When the game starts, player.y will be set to (terrainHeight + spawnHeightOffset) at the current (x,z).")]
+    public float spawnHeightOffset = 5.0f;
+
     [Header("Player Safety")]
     [SerializeField] private bool enableSafety = true;
     [SerializeField] private float safetyHeightOffset = 2.0f;
     [SerializeField] private float groundCheckDistance = 0.5f;
+    [Tooltip("If player falls below this Y (local Unity space), force-teleport back above terrain even if 'jumping'.")]
+    [SerializeField] private float hardVoidY = -500f;
+    [Tooltip("Teleport player back when they are below (terrainHeight - this value), unless they are actively jumping up.")]
+    [SerializeField] private float recoverBelowTerrain = 5.0f;
 
     [Header("Terrain Settings")]
     [SerializeField] private int resolution = 129; 
@@ -134,6 +144,96 @@ public class InfinityRenderChunks : MonoBehaviour
         // Allow setting a starting chunk from Inspector (current_x/current_y).
         // During gameplay these are still realtime values.
         TeleportToChunk(current_x, current_y);
+
+        if (autoPlacePlayerOnStart)
+        {
+            // Delay 1+ frames so other Start()s / spawning can finish, and so terrain generation kicks off.
+            StartCoroutine(PlacePlayerAboveTerrainWhenPlayerReady());
+        }
+    }
+
+    private IEnumerator PlacePlayerAboveTerrainWhenPlayerReady()
+    {
+        // Try for a short time in case the player is spawned after this component starts.
+        const int tries = 60;
+        for (int i = 0; i < tries; i++)
+        {
+            if (player == null)
+            {
+                GameObject p = GameObject.FindGameObjectWithTag("Player");
+                if (p != null) player = p.transform;
+            }
+
+            if (player != null)
+            {
+                PlacePlayerAboveTerrainAtCurrentXZ(spawnHeightOffset);
+                yield break;
+            }
+
+            yield return null;
+        }
+    }
+
+    private bool TryGetTerrainHeightRaycast(Vector3 positionXZ, out float terrainY)
+    {
+        // Raycast can easily hit the player's own collider if we cast from above at the same XZ.
+        // So we raycast ALL and choose the closest hit that is NOT part of the player hierarchy.
+        float startHeight = Mathf.Max(positionXZ.y + 500f, 1000f);
+        Vector3 start = new Vector3(positionXZ.x, startHeight, positionXZ.z);
+
+        // Big distance so it still works if player fell far below.
+        RaycastHit[] hits = Physics.RaycastAll(start, Vector3.down, 200000f, ~0, QueryTriggerInteraction.Ignore);
+        if (hits == null || hits.Length == 0)
+        {
+            terrainY = 0f;
+            return false;
+        }
+
+        Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+        Transform playerRoot = player != null ? player : null;
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider c = hits[i].collider;
+            if (c == null) continue;
+
+            // Ignore player's own colliders (including children)
+            if (playerRoot != null && c.transform.IsChildOf(playerRoot)) continue;
+
+            terrainY = hits[i].point.y;
+            return true;
+        }
+
+        terrainY = 0f;
+        return false;
+    }
+
+    private void PlacePlayerAboveTerrainAtCurrentXZ(float heightOffset)
+    {
+        if (player == null) return;
+
+        // Compute player's current chunk and in-chunk coordinates (same logic as Update)
+        int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
+        int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
+        long pX = worldChunkOriginX + localChunkX;
+        long pZ = worldChunkOriginY + localChunkY;
+
+        float inChunkX = player.position.x - (localChunkX * chunkSize);
+        float inChunkZ = player.position.z - (localChunkY * chunkSize);
+
+        // Prefer raycast (actual collider), fallback to CPU approximation if terrain isn't ready yet.
+        float terrainY;
+        if (!TryGetTerrainHeightRaycast(player.position, out terrainY))
+        {
+            terrainY = GetTerrainHeightCPU(pX, pZ, inChunkX, inChunkZ);
+        }
+
+        Vector3 newPos = player.position;
+        newPos.y = terrainY + Mathf.Max(0f, heightOffset);
+        player.position = newPos;
+
+        Rigidbody rb = player.GetComponent<Rigidbody>();
+        if (rb != null) rb.linearVelocity = Vector3.zero;
     }
 
     private void OnValidate()
@@ -604,20 +704,9 @@ public class InfinityRenderChunks : MonoBehaviour
     // CPU Noise for Safety
     private void UpdatePlayerSafety(long playerChunkX, long playerChunkY, float inChunkX, float inChunkZ)
     {
-        // Get ACTUAL terrain height using raycast from above
-        // Cast from high above player position down to get real terrain height
-        float raycastStartHeight = Mathf.Max(player.position.y + 100f, 200f); // Start raycast from high above
-        Vector3 raycastStart = new Vector3(player.position.x, raycastStartHeight, player.position.z);
-        
-        RaycastHit hit;
-        float actualTerrainHeight = float.MinValue;
-        bool hasTerrainHit = Physics.Raycast(raycastStart, Vector3.down, out hit, 500f);
-        
-        if (hasTerrainHit)
-        {
-            actualTerrainHeight = hit.point.y;
-        }
-        else
+        // Get actual terrain height; raycast ignores player's own colliders.
+        float actualTerrainHeight;
+        if (!TryGetTerrainHeightRaycast(player.position, out actualTerrainHeight))
         {
             // Fallback to approximated height if raycast doesn't hit (terrain might not be loaded)
             actualTerrainHeight = GetTerrainHeightCPU(playerChunkX, playerChunkY, inChunkX, inChunkZ);
@@ -627,11 +716,11 @@ public class InfinityRenderChunks : MonoBehaviour
         Rigidbody rb = player.GetComponent<Rigidbody>();
         bool isJumping = rb != null && rb.linearVelocity.y > 2.0f; // Only consider significant upward velocity as jumping
         
-        // Simple check: if player is below terrain by a significant amount, teleport
-        // But don't teleport if player is actively jumping (velocity up > 2)
-        float safetyThreshold = actualTerrainHeight - 15.0f;
+        // Teleport if player is below terrain, but don't fight an active jump.
+        float safetyThreshold = actualTerrainHeight - Mathf.Max(0.1f, recoverBelowTerrain);
         
-        if (!isJumping && player.position.y < safetyThreshold)
+        bool isHardVoid = player.position.y < hardVoidY;
+        if ((isHardVoid || !isJumping) && player.position.y < safetyThreshold)
         {
             // Player is below terrain and not jumping - teleport to safety
             Vector3 newPos = player.position;

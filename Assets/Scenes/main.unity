@@ -364,9 +364,7 @@ MonoBehaviour:
   chunkSize: 1000
   renderDistance: 1
   seed: 8386
-  floatingOriginThreshold: 100
-  useManualPosition: 1
-  autoTeleportOnManualChange: 1
+  floatingOriginThreshold: 1000
   current_x: 3455345435
   current_y: 94589271034
   _debugLocalPos: {x: 0, y: 0, z: 0}
