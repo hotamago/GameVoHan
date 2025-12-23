@@ -384,7 +384,7 @@ MonoBehaviour:
   enableLod: 1
   lodChunkRadii: 010000000200000004000000e7030000
   lodResolutions: 81000000410000002100000011000000
-  skirtDepth: 2
+  skirtDepth: 1
   enableFarSuperChunks: 1
   superChunkScale: 3
   superChunkStartRadius: 2
