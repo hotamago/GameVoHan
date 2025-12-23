@@ -1,7 +1,6 @@
 using UnityEngine;
 using UnityEngine.Rendering;
 using System.Collections.Generic;
-using System.Linq;
 using System;
 
 public class InfinityRenderChunks : MonoBehaviour
@@ -37,28 +36,22 @@ public class InfinityRenderChunks : MonoBehaviour
     [SerializeField] private float erosionStrength = 0.2f;
     [SerializeField] private float domainWarpStrength = 2.0f;
     
+    [Header("Shader Height Thresholds")]
+    [SerializeField] private float waterLevel = 0.2f;
+    [SerializeField] private float beachLevel = 0.25f;
+    [SerializeField] private float grassLevel = 0.55f;
+    [SerializeField] private float rockLevel = 0.75f;
+    [SerializeField] private float snowLevel = 0.9f;
+    
     [Header("GPU Resources")]
+    [Tooltip("REQUIRED: Assign TerrainGen.compute from Assets/Resources/Shaders/ folder directly in Inspector. This ensures it's included in builds.")]
     [SerializeField] private ComputeShader terrainComputeShader;
     [SerializeField] private Shader proceduralTerrainShader;
-    [SerializeField] private Shader instancedFoliageShader;
-    
-    [Header("Vegetation Mesh")]
-    [SerializeField] private Mesh treeMesh;
-    [SerializeField] private Mesh rockMesh;
-    [SerializeField] private Mesh grassMesh;
-    [SerializeField] private Texture2D vegetationTexture;
 
     // State
     // We use string keys "X_Y" for long coordinates support
     private Dictionary<string, ChunkData> loadedChunks = new Dictionary<string, ChunkData>();
     private Material terrainMaterial;
-    private Material foliageMaterial;
-    
-    // Command Buffers
-    private ComputeBuffer argsBufferTree;
-    private ComputeBuffer argsBufferRock;
-    private ComputeBuffer argsBufferGrass;
-    private uint[] args = new uint[5] { 0, 0, 0, 0, 0 };
     
     // Total amount the world has been shifted.
     // Real World Pos = Local Pos + cumulativeWorldOffset
@@ -77,12 +70,6 @@ public class InfinityRenderChunks : MonoBehaviour
     private class ChunkData
     {
         public GameObject gameObject;
-        public ComputeBuffer treeBuffer;
-        public ComputeBuffer rockBuffer;
-        public ComputeBuffer grassBuffer;
-        public int treeCount;
-        public int rockCount;
-        public int grassCount;
         public bool isReady;
     }
 
@@ -97,9 +84,26 @@ public class InfinityRenderChunks : MonoBehaviour
         if (seed == 0) seed = UnityEngine.Random.Range(-10000, 10000);
         
         InitializeMaterials();
-        InitializeMeshes();
 
-        if (terrainComputeShader == null) terrainComputeShader = Resources.Load<ComputeShader>("Shaders/TerrainGen");
+        // Verify compute shader is assigned (required for terrain generation)
+        if (terrainComputeShader == null)
+        {
+            Debug.LogError("Terrain Compute Shader is not assigned! " +
+                "Please assign 'TerrainGen.compute' from Assets/Resources/Shaders/ in the Inspector. " +
+                "Terrain generation will not work without this.");
+            enabled = false;
+            return;
+        }
+        
+        // Verify compute shader has required kernels
+        int kernelHeight = terrainComputeShader.FindKernel("GenerateHeightmap");
+        if (kernelHeight < 0)
+        {
+            Debug.LogError("TerrainGen compute shader is missing required kernel 'GenerateHeightmap'! " +
+                "The shader may not have compiled correctly for the target platform.");
+            enabled = false;
+            return;
+        }
         
         UpdateChunksImmediate();
     }
@@ -123,29 +127,22 @@ public class InfinityRenderChunks : MonoBehaviour
         if (useFallback) terrainMaterial.color = new Color(0.4f, 0.6f, 0.4f); // Green
         
         // Set shader properties
-        terrainMaterial.SetFloat("_HeightMultiplier", heightMultiplier);
-
-        // Foliage Logic
-        if (instancedFoliageShader == null) instancedFoliageShader = Shader.Find("Custom/InstancedFoliage");
-        if (instancedFoliageShader == null) instancedFoliageShader = Shader.Find("Standard"); // Instancing fallback
+        UpdateMaterialProperties();
+    }
+    
+    private void UpdateMaterialProperties()
+    {
+        if (terrainMaterial == null) return;
         
-        foliageMaterial = new Material(instancedFoliageShader);
-        if (vegetationTexture != null) foliageMaterial.mainTexture = vegetationTexture;
-        foliageMaterial.enableInstancing = true;
-    }
-    
-    private void InitializeMeshes()
-    {
-        if (treeMesh == null) CreatePrimitiveMesh(PrimitiveType.Cylinder, ref treeMesh);
-        if (rockMesh == null) CreatePrimitiveMesh(PrimitiveType.Cube, ref rockMesh);
-        if (grassMesh == null) CreatePrimitiveMesh(PrimitiveType.Quad, ref grassMesh);
-    }
-    
-    private void CreatePrimitiveMesh(PrimitiveType type, ref Mesh target)
-    {
-        GameObject p = GameObject.CreatePrimitive(type); 
-        target = p.GetComponent<MeshFilter>().sharedMesh; 
-        Destroy(p);
+        // Set height multiplier
+        terrainMaterial.SetFloat("_HeightMultiplier", heightMultiplier);
+        
+        // Set height thresholds
+        terrainMaterial.SetFloat("_WaterLevel", waterLevel);
+        terrainMaterial.SetFloat("_BeachLevel", beachLevel);
+        terrainMaterial.SetFloat("_GrassLevel", grassLevel);
+        terrainMaterial.SetFloat("_RockLevel", rockLevel);
+        terrainMaterial.SetFloat("_SnowLevel", snowLevel);
     }
 
     private void Update()
@@ -174,11 +171,8 @@ public class InfinityRenderChunks : MonoBehaviour
         // We track a separate "lastUpdateChunk" to avoid checking dictionary every frame? 
         // Or just lazy check. Let's just check.
         UpdateChunks(pX, pZ);
-
-        // 4. Render
-        RenderVegetation();
         
-        // 5. Safety
+        // 4. Safety
         if (enableSafety) UpdatePlayerSafety(playerAbsPos);
     }
     
@@ -255,10 +249,6 @@ public class InfinityRenderChunks : MonoBehaviour
     {
         if (loadedChunks.TryGetValue(key, out ChunkData data))
         {
-            if (data.treeBuffer != null) data.treeBuffer.Release();
-            if (data.rockBuffer != null) data.rockBuffer.Release();
-            if (data.grassBuffer != null) data.grassBuffer.Release();
-            
             if (data.gameObject != null) Destroy(data.gameObject);
             loadedChunks.Remove(key);
         }
@@ -266,7 +256,11 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private void CreateChunk(long cx, long cy, string key)
     {
-        if (terrainComputeShader == null) return;
+        if (terrainComputeShader == null)
+        {
+            Debug.LogWarning($"Cannot create chunk {cx}_{cy}: Terrain Compute Shader is not assigned!");
+            return;
+        }
 
         GameObject chunkObj = new GameObject($"Chunk_{cx}_{cy}");
         
@@ -306,7 +300,17 @@ public class InfinityRenderChunks : MonoBehaviour
         int kernelBiome = terrainComputeShader.FindKernel("GenerateBiomeMap");
         int kernelNormal = terrainComputeShader.FindKernel("CalculateNormals");
         int kernelMesh = terrainComputeShader.FindKernel("GenerateMesh");
-        int kernelVeg = terrainComputeShader.FindKernel("PlaceVegetation");
+        
+        // Verify all required kernels exist
+        if (kernelHeight < 0 || kernelErode < 0 || kernelSmooth < 0 || kernelBiome < 0 || 
+            kernelNormal < 0 || kernelMesh < 0)
+        {
+            Debug.LogError($"Compute shader kernels not found for chunk {cx}_{cy}! " +
+                $"Kernels: Height={kernelHeight}, Erode={kernelErode}, Smooth={kernelSmooth}, " +
+                $"Biome={kernelBiome}, Normal={kernelNormal}, Mesh={kernelMesh}. " +
+                "The compute shader may not have compiled correctly for the target platform.");
+            return;
+        }
         
         // Buffers
         int vertCount = resolution * resolution;
@@ -328,8 +332,6 @@ public class InfinityRenderChunks : MonoBehaviour
         ComputeBuffer uvBuffer = new ComputeBuffer(vertCount, sizeof(float) * 2);
         ComputeBuffer normalBuffer = new ComputeBuffer(vertCount, sizeof(float) * 3);
         ComputeBuffer triBuffer = new ComputeBuffer((resolution - 1) * (resolution - 1) * 6, sizeof(int));
-        ComputeBuffer vegBuffer = new ComputeBuffer(20000, 32, ComputeBufferType.Append);
-        vegBuffer.SetCounterValue(0);
 
         // Parameters - Pass doubles as floats? 
         // Compute shader only supports float. 
@@ -419,13 +421,6 @@ public class InfinityRenderChunks : MonoBehaviour
         terrainComputeShader.SetBuffer(kernelMesh, "Triangles", triBuffer);
         terrainComputeShader.Dispatch(kernelMesh, groups, groups, 1);
 
-        terrainComputeShader.SetTexture(kernelVeg, "HeightMap", src);
-        terrainComputeShader.SetTexture(kernelVeg, "BiomeMap", biomeMap);
-        terrainComputeShader.SetBuffer(kernelVeg, "Normals", normalBuffer);
-        terrainComputeShader.SetBuffer(kernelVeg, "Vertices", vertBuffer);
-        terrainComputeShader.SetBuffer(kernelVeg, "VegetationBuffer", vegBuffer);
-        terrainComputeShader.Dispatch(kernelVeg, groups, groups, 1);
-
         // Readback
         Vector3[] vertices = new Vector3[vertCount];
         vertBuffer.GetData(vertices);
@@ -454,29 +449,8 @@ public class InfinityRenderChunks : MonoBehaviour
         mf.mesh = mesh;
         mr.material = terrainMaterial;
         // Update material properties
-        terrainMaterial.SetFloat("_HeightMultiplier", heightMultiplier);
+        UpdateMaterialProperties();
         mc.sharedMesh = mesh;
-
-        // Vegetation
-        ComputeBuffer countBuffer = new ComputeBuffer(1, sizeof(int), ComputeBufferType.IndirectArguments);
-        int[] countArr = new int[1] { 0 };
-        ComputeBuffer.CopyCount(vegBuffer, countBuffer, 0);
-        countBuffer.GetData(countArr);
-        int totalVeg = countArr[0];
-        
-        if (totalVeg > 0)
-        {
-             GpuTerrainData.VegetationInstance[] allVeg = new GpuTerrainData.VegetationInstance[totalVeg];
-             vegBuffer.GetData(allVeg, 0, 0, totalVeg);
-             
-             var trees = allVeg.Where(v => v.typeID == 0).ToArray();
-             var rocks = allVeg.Where(v => v.typeID == 1).ToArray();
-             var grasses = allVeg.Where(v => v.typeID == 2).ToArray();
-             
-             if (trees.Length > 0) { data.treeCount = trees.Length; data.treeBuffer = new ComputeBuffer(trees.Length, 32); data.treeBuffer.SetData(trees); }
-             if (rocks.Length > 0) { data.rockCount = rocks.Length; data.rockBuffer = new ComputeBuffer(rocks.Length, 32); data.rockBuffer.SetData(rocks); }
-             if (grasses.Length > 0) { data.grassCount = grasses.Length; data.grassBuffer = new ComputeBuffer(grasses.Length, 32); data.grassBuffer.SetData(grasses); }
-        }
 
         heightMapA.Release();
         heightMapB.Release();
@@ -485,47 +459,8 @@ public class InfinityRenderChunks : MonoBehaviour
         uvBuffer.Release();
         normalBuffer.Release();
         triBuffer.Release();
-        vegBuffer.Release();
-        countBuffer.Release();
         
         data.isReady = true;
-    }
-
-    private void RenderVegetation()
-    {
-        if (foliageMaterial == null) return;
-        
-        if (argsBufferTree == null) argsBufferTree = new ComputeBuffer(1, args.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
-        if (argsBufferRock == null) argsBufferRock = new ComputeBuffer(1, args.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
-        if (argsBufferGrass == null) argsBufferGrass = new ComputeBuffer(1, args.Length * sizeof(uint), ComputeBufferType.IndirectArguments);
-
-        foreach (var kvp in loadedChunks)
-        {
-            ChunkData data = kvp.Value;
-            if (!data.isReady) continue;
-            
-            DrawInstanced(data.treeBuffer, data.treeCount, treeMesh, argsBufferTree, new Color(0.1f, 0.4f, 0.1f));
-            DrawInstanced(data.rockBuffer, data.rockCount, rockMesh, argsBufferRock, new Color(0.5f, 0.5f, 0.5f));
-            DrawInstanced(data.grassBuffer, data.grassCount, grassMesh, argsBufferGrass, new Color(0.3f, 0.7f, 0.2f));
-        }
-    }
-    
-    private void DrawInstanced(ComputeBuffer buffer, int count, Mesh mesh, ComputeBuffer argsBuffer, Color color)
-    {
-        if (count == 0 || mesh == null || buffer == null) return;
-        
-        // Use MaterialPropertyBlock to set buffer per draw call
-        MaterialPropertyBlock props = new MaterialPropertyBlock();
-        props.SetBuffer("_VegetationBuffer", buffer);
-        props.SetColor("_Color", color);
-        
-        args[0] = (uint)mesh.GetIndexCount(0);
-        args[1] = (uint)count;
-        args[2] = (uint)mesh.GetIndexStart(0);
-        args[3] = (uint)mesh.GetBaseVertex(0);
-        argsBuffer.SetData(args);
-        
-        Graphics.DrawMeshInstancedIndirect(mesh, 0, foliageMaterial, new Bounds(Vector3.zero, Vector3.one * 10000), argsBuffer, 0, props);
     }
     
     // CPU Noise for Safety
@@ -637,14 +572,6 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private void OnDestroy()
     {
-        foreach (var kvp in loadedChunks)
-        {
-            if (kvp.Value.treeBuffer != null) kvp.Value.treeBuffer.Release();
-            if (kvp.Value.rockBuffer != null) kvp.Value.rockBuffer.Release();
-            if (kvp.Value.grassBuffer != null) kvp.Value.grassBuffer.Release();
-        }
-        if (argsBufferTree != null) argsBufferTree.Release();
-        if (argsBufferRock != null) argsBufferRock.Release();
-        if (argsBufferGrass != null) argsBufferGrass.Release();
+        // Cleanup is handled by UnloadChunk when chunks are destroyed
     }
 }

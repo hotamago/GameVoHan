@@ -1,0 +1,20 @@
+{
+    "asset": "31aae2f85a88e9d43a6cf6fa6aa864b4",
+    "fileName": "019b4c0c-1d21-7e9f-89da-b5897c213659.png",
+    "prompt": "grass, green, cartoon",
+    "negativePrompt": "",
+    "model": "5b5b2af1-6ea4-4266-b087-cc9f3bf4f450",
+    "modelName": "Flux.1 Dev",
+    "customSeed": -1,
+    "w3CTraceId": "6e8c3e2ce5ad9f946cd81a2f749404a3",
+    "refinementMode": "Generation",
+    "pixelateTargetSize": 0,
+    "pixelateKeepImageSize": false,
+    "pixelatePixelBlockSize": 0,
+    "pixelateMode": 0,
+    "pixelateOutlineThickness": 0,
+    "doodles": {
+        "m_Items": []
+    },
+    "upscaleFactor": 0
+}

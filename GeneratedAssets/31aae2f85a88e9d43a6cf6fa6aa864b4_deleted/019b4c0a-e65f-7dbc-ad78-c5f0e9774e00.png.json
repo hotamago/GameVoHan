@@ -1,0 +1,20 @@
+{
+    "asset": "31aae2f85a88e9d43a6cf6fa6aa864b4",
+    "fileName": "019b4c0a-e65f-7dbc-ad78-c5f0e9774e00.png",
+    "prompt": "grass",
+    "negativePrompt": "",
+    "model": "5b5b2af1-6ea4-4266-b087-cc9f3bf4f450",
+    "modelName": "Flux.1 Dev",
+    "customSeed": -1,
+    "w3CTraceId": "5b188f4d73b7e08f113d020ce8c8d4c2",
+    "refinementMode": "Generation",
+    "pixelateTargetSize": 0,
+    "pixelateKeepImageSize": false,
+    "pixelatePixelBlockSize": 0,
+    "pixelateMode": 0,
+    "pixelateOutlineThickness": 0,
+    "doodles": {
+        "m_Items": []
+    },
+    "upscaleFactor": 0
+}

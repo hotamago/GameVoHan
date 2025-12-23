@@ -381,13 +381,13 @@ MonoBehaviour:
   plainStrength: 0.6
   erosionStrength: 0.2
   domainWarpStrength: 2
-  terrainComputeShader: {fileID: 0}
-  proceduralTerrainShader: {fileID: 0}
-  instancedFoliageShader: {fileID: 0}
-  treeMesh: {fileID: 0}
-  rockMesh: {fileID: 0}
-  grassMesh: {fileID: 0}
-  vegetationTexture: {fileID: 0}
+  waterLevel: 0.32
+  beachLevel: 0.35
+  grassLevel: 0.4
+  rockLevel: 0.75
+  snowLevel: 0.9
+  terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
+  proceduralTerrainShader: {fileID: 4800000, guid: 3496a8c2308eae241a457749b5ec9a2a, type: 3}
 --- !u!4 &953848056
 Transform:
   m_ObjectHideFlags: 0
