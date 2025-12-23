@@ -223,7 +223,12 @@ void GenerateHeightmap (uint3 id : SV_DispatchThreadID)
     if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
 
     float step = chunkSize / (float)(resolution - 1);
-    float2 localPos = float2(id.x * step, id.y * step);
+    
+    // Ensure edge positions are exactly aligned for seamless chunks
+    // For the last vertex in each dimension, use exact chunkSize to avoid rounding errors
+    float localX = (id.x == (uint)(resolution - 1)) ? chunkSize : (id.x * step);
+    float localZ = (id.y == (uint)(resolution - 1)) ? chunkSize : (id.y * step);
+    float2 localPos = float2(localX, localZ);
     float2 worldPos = float2(chunkX * chunkSize, chunkY * chunkSize) + localPos;
 
     float height = GetHeight(worldPos);
@@ -237,7 +242,11 @@ void GenerateBiomeMap (uint3 id : SV_DispatchThreadID)
     if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
 
     float step = chunkSize / (float)(resolution - 1);
-    float2 localPos = float2(id.x * step, id.y * step);
+    
+    // Ensure edge positions are exactly aligned for seamless chunks
+    float localX = (id.x == (uint)(resolution - 1)) ? chunkSize : (id.x * step);
+    float localZ = (id.y == (uint)(resolution - 1)) ? chunkSize : (id.y * step);
+    float2 localPos = float2(localX, localZ);
     float2 worldPos = float2(chunkX * chunkSize, chunkY * chunkSize) + localPos;
 
     float height = HeightMap[id.xy];
@@ -329,7 +338,12 @@ void GenerateMesh (uint3 id : SV_DispatchThreadID)
     
     float height = HeightMap[id.xy];
     
-    Vertices[index] = float3(id.x * step, height, id.y * step);
+    // Ensure edge vertices are exactly aligned for seamless chunks
+    // For the last vertex in each dimension, use exact chunkSize to avoid rounding errors
+    float localX = (id.x == (uint)(resolution - 1)) ? chunkSize : (id.x * step);
+    float localZ = (id.y == (uint)(resolution - 1)) ? chunkSize : (id.y * step);
+    
+    Vertices[index] = float3(localX, height, localZ);
     UVs[index] = float2(id.x / (float)(resolution - 1), id.y / (float)(resolution - 1));
     
     // Generate Triangles (only for x < res-1 and y < res-1)
@@ -357,8 +371,11 @@ void PlaceVegetation (uint3 id : SV_DispatchThreadID)
     float biome = biomeData.x;
     float moisture = biomeData.y;
     
-    // Random check
-    float2 worldPos = float2(chunkX * chunkSize + id.x * (chunkSize/resolution), chunkY * chunkSize + id.y * (chunkSize/resolution));
+    // Random check - use exact positioning to match mesh vertices
+    float step = chunkSize / (float)(resolution - 1);
+    float localX = (id.x == (uint)(resolution - 1)) ? chunkSize : (id.x * step);
+    float localZ = (id.y == (uint)(resolution - 1)) ? chunkSize : (id.y * step);
+    float2 worldPos = float2(chunkX * chunkSize, chunkY * chunkSize) + float2(localX, localZ);
     float rng = random(worldPos * 1.23); // New random seed per pos
     
     float heightNorm = height / heightMultiplier;
