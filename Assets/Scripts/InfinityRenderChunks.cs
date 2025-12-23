@@ -53,6 +53,16 @@ public class InfinityRenderChunks : MonoBehaviour
     [SerializeField] private int[] lodResolutions = new int[] { 129, 65, 33, 17 };
     [Tooltip("Optional: add a downward skirt on chunk borders to hide tiny cracks from LOD T-junctions. 0 disables.")]
     [SerializeField] private float skirtDepth = 0f;
+
+    [Header("Far SuperChunks (×3)")]
+    [Tooltip("Experimental: replace far-away base chunks with larger 'superchunks' to reduce chunk count.")]
+    [SerializeField] private bool enableFarSuperChunks = false;
+    [Tooltip("Superchunk covers (scale x scale) base chunks. Default 3.")]
+    [SerializeField] private int superChunkScale = 3;
+    [Tooltip("Chebyshev radius (in base chunks). Beyond this, superchunks are used when possible.")]
+    [SerializeField] private int superChunkStartRadius = 4;
+    [Tooltip("Superchunks usually should NOT have colliders (performance).")]
+    [SerializeField] private bool superChunksHaveCollider = false;
     
     [Header("Advanced Terrain")]
     [SerializeField] private float mountainStrength = 0.4f;
@@ -89,6 +99,12 @@ public class InfinityRenderChunks : MonoBehaviour
         public GameObject gameObject;
         public bool isReady;
         public int lodResolution;
+        public bool isSuperChunk;
+        public int superScale;
+        public long noiseChunkX;
+        public long noiseChunkY;
+        public int baseVertsPerChunk;
+        public float chunkSizeWorld;
     }
 
     private long _runtimeChunkX;
@@ -393,6 +409,36 @@ public class InfinityRenderChunks : MonoBehaviour
         return (int)v;
     }
 
+    private static long FloorDiv(long a, int b)
+    {
+        // b must be > 0
+        if (b <= 0) return 0;
+        if (a >= 0) return a / b;
+        return -(((-a) + b - 1) / b);
+    }
+
+    private static long ClampLong(long v, long min, long max)
+    {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
+
+    private struct DesiredChunk
+    {
+        public string key;
+        public bool isSuper;
+        public int superScale;
+        public long noiseChunkX;
+        public long noiseChunkY;
+        public long minBaseChunkX;
+        public long minBaseChunkY;
+        public int lodResolution;
+        public float chunkSizeWorld;
+        public int baseVertsPerChunk;
+        public bool wantCollider;
+    }
+
     private int GetLodResolutionForChunkDelta(int dx, int dy)
     {
         if (!enableLod || lodChunkRadii == null || lodResolutions == null) return resolution;
@@ -530,16 +576,93 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private void UpdateChunks(long centerChunkX, long centerChunkY)
     {
-        // Identify active chunks
-        HashSet<string> activeKeys = new HashSet<string>();
-        
-        for (int x = -renderDistance; x <= renderDistance; x++)
+        // Build desired chunks (base + optional superchunks)
+        Dictionary<string, DesiredChunk> desired = new Dictionary<string, DesiredChunk>(256);
+
+        int scale = Mathf.Max(2, superChunkScale);
+        int baseVertsBase = Mathf.Max(1, resolution - 1);
+
+        long nearMinX = centerChunkX - superChunkStartRadius;
+        long nearMaxX = centerChunkX + superChunkStartRadius;
+        long nearMinY = centerChunkY - superChunkStartRadius;
+        long nearMaxY = centerChunkY + superChunkStartRadius;
+
+        for (int dx = -renderDistance; dx <= renderDistance; dx++)
         {
-            for (int y = -renderDistance; y <= renderDistance; y++)
+            for (int dy = -renderDistance; dy <= renderDistance; dy++)
             {
-                long cx = centerChunkX + x;
-                long cy = centerChunkY + y;
-                activeKeys.Add($"{cx}_{cy}");
+                long cx = centerChunkX + dx;
+                long cy = centerChunkY + dy;
+                int r = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy));
+
+                bool trySuper = enableFarSuperChunks && r > superChunkStartRadius;
+                if (trySuper)
+                {
+                    long sx = FloorDiv(cx, scale);
+                    long sy = FloorDiv(cy, scale);
+                    long minBaseX = sx * scale;
+                    long minBaseY = sy * scale;
+                    long maxBaseX = minBaseX + (scale - 1);
+                    long maxBaseY = minBaseY + (scale - 1);
+
+                    // If this superchunk touches the near square, fall back to base chunks to avoid overlap/hard seams.
+                    bool intersectsNear =
+                        !(maxBaseX < nearMinX || minBaseX > nearMaxX || maxBaseY < nearMinY || minBaseY > nearMaxY);
+
+                    if (!intersectsNear)
+                    {
+                        string skey = $"S_{scale}_{sx}_{sy}";
+                        if (!desired.ContainsKey(skey))
+                        {
+                            // Approx distance for LOD selection: use superchunk center in base-chunk units.
+                            long centerX = minBaseX + (scale / 2);
+                            long centerY2 = minBaseY + (scale / 2);
+                            int sdx = ClampLongToInt(centerX - centerChunkX);
+                            int sdy = ClampLongToInt(centerY2 - centerChunkY);
+
+                            int lodRes = GetLodResolutionForChunkDelta(sdx, sdy);
+                            DesiredChunk d = new DesiredChunk
+                            {
+                                key = skey,
+                                isSuper = true,
+                                superScale = scale,
+                                noiseChunkX = sx,
+                                noiseChunkY = sy,
+                                minBaseChunkX = minBaseX,
+                                minBaseChunkY = minBaseY,
+                                lodResolution = lodRes,
+                                chunkSizeWorld = chunkSize * scale,
+                                baseVertsPerChunk = baseVertsBase * scale,
+                                wantCollider = superChunksHaveCollider
+                            };
+                            desired[skey] = d;
+                        }
+
+                        continue;
+                    }
+                }
+
+                // Base chunk
+                string key = $"{cx}_{cy}";
+                if (!desired.ContainsKey(key))
+                {
+                    int lodRes = GetLodResolutionForChunkDelta(dx, dy);
+                    DesiredChunk d = new DesiredChunk
+                    {
+                        key = key,
+                        isSuper = false,
+                        superScale = 1,
+                        noiseChunkX = cx,
+                        noiseChunkY = cy,
+                        minBaseChunkX = cx,
+                        minBaseChunkY = cy,
+                        lodResolution = lodRes,
+                        chunkSizeWorld = chunkSize,
+                        baseVertsPerChunk = baseVertsBase,
+                        wantCollider = true
+                    };
+                    desired[key] = d;
+                }
             }
         }
 
@@ -547,38 +670,32 @@ public class InfinityRenderChunks : MonoBehaviour
         List<string> toRemove = new List<string>();
         foreach (var key in loadedChunks.Keys)
         {
-            if (!activeKeys.Contains(key)) toRemove.Add(key);
+            if (!desired.ContainsKey(key)) toRemove.Add(key);
         }
         foreach (var key in toRemove) UnloadChunk(key);
 
-        // Load new
-        foreach (var key in activeKeys)
+        // Create/update desired
+        foreach (var kvp in desired)
         {
-            if (!loadedChunks.ContainsKey(key))
+            DesiredChunk d = kvp.Value;
+            if (!loadedChunks.TryGetValue(d.key, out ChunkData existing) || existing == null || existing.gameObject == null)
             {
-                // Parse key back to coordinates
-                string[] parts = key.Split('_');
-                long cx = long.Parse(parts[0]);
-                long cy = long.Parse(parts[1]);
-                CreateChunk(cx, cy, key);
+                CreateChunk(d);
+                continue;
             }
-            else
-            {
-                // LOD update (regenerate chunk mesh if desired LOD changed)
-                string[] parts = key.Split('_');
-                long cx = long.Parse(parts[0]);
-                long cy = long.Parse(parts[1]);
-                int dx = ClampLongToInt(cx - centerChunkX);
-                int dy = ClampLongToInt(cy - centerChunkY);
-                int desiredRes = GetLodResolutionForChunkDelta(dx, dy);
 
-                if (loadedChunks.TryGetValue(key, out ChunkData existing) && existing != null)
-                {
-                    if (existing.lodResolution != desiredRes)
-                    {
-                        GenerateChunkGPU(cx, cy, existing, desiredRes);
-                    }
-                }
+            bool needsRegen =
+                existing.lodResolution != d.lodResolution ||
+                existing.isSuperChunk != d.isSuper ||
+                existing.superScale != d.superScale ||
+                existing.noiseChunkX != d.noiseChunkX ||
+                existing.noiseChunkY != d.noiseChunkY ||
+                existing.baseVertsPerChunk != d.baseVertsPerChunk ||
+                Mathf.Abs(existing.chunkSizeWorld - d.chunkSizeWorld) > 0.0001f;
+
+            if (needsRegen)
+            {
+                GenerateChunkGPU(d.noiseChunkX, d.noiseChunkY, existing, d.lodResolution, d.chunkSizeWorld, d.baseVertsPerChunk, d.wantCollider);
             }
         }
     }
@@ -675,42 +792,54 @@ public class InfinityRenderChunks : MonoBehaviour
         }
     }
 
-    private void CreateChunk(long cx, long cy, string key)
+    private void CreateChunk(DesiredChunk d)
     {
         if (terrainComputeShader == null)
         {
-            Debug.LogWarning($"Cannot create chunk {cx}_{cy}: Terrain Compute Shader is not assigned!");
+            Debug.LogWarning($"Cannot create chunk {d.key}: Terrain Compute Shader is not assigned!");
             return;
         }
 
-        GameObject chunkObj = new GameObject($"Chunk_{cx}_{cy}");
+        GameObject chunkObj = new GameObject(d.isSuper
+            ? $"SuperChunk_{d.superScale}_{d.noiseChunkX}_{d.noiseChunkY}"
+            : $"Chunk_{d.noiseChunkX}_{d.noiseChunkY}");
         
         // Local position is based on relative chunk delta from the chunk-origin.
         // Delta is always small (renderDistance) so floats are safe.
-        long relX = cx - worldChunkOriginX;
-        long relY = cy - worldChunkOriginY;
+        long relX = d.minBaseChunkX - worldChunkOriginX;
+        long relY = d.minBaseChunkY - worldChunkOriginY;
         Vector3 localPos = new Vector3(relX * chunkSize, 0, relY * chunkSize);
         
         chunkObj.transform.position = localPos;
         chunkObj.transform.parent = transform;
         chunkObj.layer = LayerMask.NameToLayer("Default");
 
-        ChunkData data = new ChunkData { gameObject = chunkObj, isReady = false };
-        loadedChunks[key] = data;
+        ChunkData data = new ChunkData
+        {
+            gameObject = chunkObj,
+            isReady = false,
+            lodResolution = 0,
+            isSuperChunk = d.isSuper,
+            superScale = d.superScale,
+            noiseChunkX = d.noiseChunkX,
+            noiseChunkY = d.noiseChunkY,
+            baseVertsPerChunk = d.baseVertsPerChunk,
+            chunkSizeWorld = d.chunkSizeWorld
+        };
+        loadedChunks[d.key] = data;
 
-        // Determine initial LOD based on current center chunk.
-        int centerDx = ClampLongToInt(cx - _runtimeChunkX);
-        int centerDy = ClampLongToInt(cy - _runtimeChunkY);
-        int lodRes = GetLodResolutionForChunkDelta(centerDx, centerDy);
-
-        GenerateChunkGPU(cx, cy, data, lodRes);
+        GenerateChunkGPU(d.noiseChunkX, d.noiseChunkY, data, d.lodResolution, d.chunkSizeWorld, d.baseVertsPerChunk, d.wantCollider);
     }
 
-    private void GenerateChunkGPU(long cx, long cy, ChunkData data, int lodResolution)
+    private void GenerateChunkGPU(long noiseChunkX, long noiseChunkY, ChunkData data, int lodResolution, float chunkSizeWorld, int baseVertsPerChunkOverride, bool wantCollider)
     {
         lodResolution = ValidateLodResolution(lodResolution);
         data.isReady = false;
         data.lodResolution = lodResolution;
+        data.noiseChunkX = noiseChunkX;
+        data.noiseChunkY = noiseChunkY;
+        data.baseVertsPerChunk = Mathf.Max(1, baseVertsPerChunkOverride);
+        data.chunkSizeWorld = chunkSizeWorld;
 
         // Noise Generation uses Absolute Coordinates (cx, cy) directly!
         // No virtual offsets needed, cx/cy ARE the virtual offsets.
@@ -726,7 +855,7 @@ public class InfinityRenderChunks : MonoBehaviour
         if (kernelHeight < 0 || kernelErode < 0 || kernelSmooth < 0 || kernelBiome < 0 || 
             kernelNormal < 0 || kernelMesh < 0)
         {
-            Debug.LogError($"Compute shader kernels not found for chunk {cx}_{cy}! " +
+            Debug.LogError($"Compute shader kernels not found for chunk {noiseChunkX}_{noiseChunkY}! " +
                 $"Kernels: Height={kernelHeight}, Erode={kernelErode}, Smooth={kernelSmooth}, " +
                 $"Biome={kernelBiome}, Normal={kernelNormal}, Mesh={kernelMesh}. " +
                 "The compute shader may not have compiled correctly for the target platform.");
@@ -768,9 +897,9 @@ public class InfinityRenderChunks : MonoBehaviour
         // However, for this task, we assume the user accepts noise limits or we'd need a double-precision noise library.
         // Let's rely on standard float behavior for now, it's "Infinite" enough for most games.
         
-        terrainComputeShader.SetFloat("chunkSize", chunkSize);
+        terrainComputeShader.SetFloat("chunkSize", chunkSizeWorld);
         terrainComputeShader.SetInt("resolution", lodResolution);
-        terrainComputeShader.SetInt("baseVertsPerChunk", Mathf.Max(1, resolution - 1));
+        terrainComputeShader.SetInt("baseVertsPerChunk", Mathf.Max(1, baseVertsPerChunkOverride));
         terrainComputeShader.SetFloat("heightMultiplier", heightMultiplier);
         terrainComputeShader.SetInt("octaves", octaves);
         terrainComputeShader.SetFloat("persistence", persistence);
@@ -778,8 +907,8 @@ public class InfinityRenderChunks : MonoBehaviour
         terrainComputeShader.SetInt("seed", seed);
 
         // Stable-at-infinity noise configuration (no float world coordinates in shader)
-        SetLongAsUInt2(terrainComputeShader, "chunkXLo", "chunkXHi", cx);
-        SetLongAsUInt2(terrainComputeShader, "chunkYLo", "chunkYHi", cy);
+        SetLongAsUInt2(terrainComputeShader, "chunkXLo", "chunkXHi", noiseChunkX);
+        SetLongAsUInt2(terrainComputeShader, "chunkYLo", "chunkYHi", noiseChunkY);
         terrainComputeShader.SetInt("baseNoiseShift", ComputeNoiseShift(noiseScale));
         terrainComputeShader.SetInt("moistureNoiseShift", ComputeNoiseShift(0.002f));
         terrainComputeShader.SetInt("temperatureNoiseShift", ComputeNoiseShift(0.003f));
@@ -867,7 +996,7 @@ public class InfinityRenderChunks : MonoBehaviour
                 if (float.IsNaN(v.x) || float.IsNaN(v.y) || float.IsNaN(v.z) ||
                     float.IsInfinity(v.x) || float.IsInfinity(v.y) || float.IsInfinity(v.z))
                 {
-                    Debug.LogError($"GPU mesh data invalid (NaN/Inf) for chunk {cx}_{cy}. Skipping mesh build. Check compute shader compile errors in Console.");
+                    Debug.LogError($"GPU mesh data invalid (NaN/Inf) for chunk {noiseChunkX}_{noiseChunkY}. Skipping mesh build. Check compute shader compile errors in Console.");
                     return;
                 }
             }
@@ -877,7 +1006,7 @@ public class InfinityRenderChunks : MonoBehaviour
                 int t = triangles[i];
                 if ((uint)t >= (uint)vertCount)
                 {
-                    Debug.LogError($"GPU triangle index out of bounds for chunk {cx}_{cy} (tri[{i}]={t}, vertCount={vertCount}). Skipping mesh build. Check compute shader compile errors in Console.");
+                    Debug.LogError($"GPU triangle index out of bounds for chunk {noiseChunkX}_{noiseChunkY} (tri[{i}]={t}, vertCount={vertCount}). Skipping mesh build. Check compute shader compile errors in Console.");
                     return;
                 }
             }
@@ -901,13 +1030,25 @@ public class InfinityRenderChunks : MonoBehaviour
             MeshRenderer mr = data.gameObject.GetComponent<MeshRenderer>();
             if (mr == null) mr = data.gameObject.AddComponent<MeshRenderer>();
             MeshCollider mc = data.gameObject.GetComponent<MeshCollider>();
-            if (mc == null) mc = data.gameObject.AddComponent<MeshCollider>();
+            if (wantCollider)
+            {
+                if (mc == null) mc = data.gameObject.AddComponent<MeshCollider>();
+            }
+            else
+            {
+                if (mc != null) Destroy(mc);
+            }
             
             mf.mesh = mesh;
             mr.material = terrainMaterial;
             // Update material properties
             UpdateMaterialProperties();
-            mc.sharedMesh = mesh;
+            if (wantCollider)
+            {
+                // Re-fetch in case it was destroyed/added
+                mc = data.gameObject.GetComponent<MeshCollider>();
+                if (mc != null) mc.sharedMesh = mesh;
+            }
             
             data.isReady = true;
         }

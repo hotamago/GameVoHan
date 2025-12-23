@@ -362,7 +362,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderChunks
   player: {fileID: 86797383}
   chunkSize: 200
-  renderDistance: 5
+  renderDistance: 10
   seed: 8386
   floatingOriginThreshold: 1000
   current_x: 3455345435
@@ -378,13 +378,17 @@ MonoBehaviour:
   resolution: 257
   heightMultiplier: 1500
   noiseScale: 0.005
-  octaves: 8
+  octaves: 4
   persistence: 0.5
   lacunarity: 2
   enableLod: 1
-  lodChunkRadii: 020000000300000004000000e7030000
-  lodResolutions: 01010000810000002100000009000000
-  skirtDepth: 0
+  lodChunkRadii: 010000000200000004000000e7030000
+  lodResolutions: 81000000410000002100000011000000
+  skirtDepth: 2
+  enableFarSuperChunks: 1
+  superChunkScale: 3
+  superChunkStartRadius: 2
+  superChunksHaveCollider: 0
   mountainStrength: 0.4
   plainStrength: 0.3
   erosionStrength: 0.2
@@ -470,7 +474,7 @@ Camera:
     width: 1
     height: 1
   near clip plane: 0.3
-  far clip plane: 5000
+  far clip plane: 2000
   field of view: 90
   orthographic: 0
   orthographic size: 5
