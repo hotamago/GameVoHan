@@ -12,9 +12,15 @@ public class InfinityRenderChunks : MonoBehaviour
     [SerializeField] private int seed = 0;
     [SerializeField] private float floatingOriginThreshold = 500f;
 
-    [Header("Debug Info")]
+    [Header("Current Position")]
+    [Tooltip("Enable to manually control current_x and current_y. When enabled, Update() won't overwrite these values.")]
+    [SerializeField] private bool useManualPosition = false;
+    [Tooltip("When useManualPosition is enabled, changing current_x/current_y will auto-teleport the virtual world so the target chunk renders near the player.")]
+    [SerializeField] private bool autoTeleportOnManualChange = true;
     public long current_x;
     public long current_y;
+    
+    [Header("Debug Info")]
     [SerializeField] private Vector3 _debugLocalPos;
 
     [Header("Player Safety")]
@@ -71,6 +77,37 @@ public class InfinityRenderChunks : MonoBehaviour
     {
         public GameObject gameObject;
         public bool isReady;
+    }
+
+    private long _lastManualX;
+    private long _lastManualY;
+    private bool _hadManualApplied;
+
+    private static void SetLongAsUInt2(ComputeShader cs, string loName, string hiName, long value)
+    {
+        // Preserve two's complement bit pattern so negative coords stay deterministic.
+        ulong u = unchecked((ulong)value);
+        uint lo = (uint)u;
+        uint hi = (uint)(u >> 32);
+        cs.SetInt(loName, unchecked((int)lo));
+        cs.SetInt(hiName, unchecked((int)hi));
+    }
+
+    private int ComputeNoiseShift(float scale)
+    {
+        // Convert the old "world space scale" into a stable, power-of-two cell size in vertex-grid units.
+        // cellSizeWorld ≈ 1/scale
+        // stepWorld = chunkSize / (resolution-1)
+        // cellSizeVerts ≈ cellSizeWorld / stepWorld
+        if (scale <= 0f) return 8;
+
+        float stepWorld = chunkSize / (float)(resolution - 1);
+        float cellSizeVerts = (1f / scale) / stepWorld;
+        if (cellSizeVerts <= 1f) return 0;
+
+        int shift = Mathf.RoundToInt(Mathf.Log(cellSizeVerts, 2f));
+        // Shader assumes [0..30] (uses 1u<<shift)
+        return Mathf.Clamp(shift, 0, 30);
     }
 
     private void Start()
@@ -149,6 +186,25 @@ public class InfinityRenderChunks : MonoBehaviour
     {
         if (player == null) return;
 
+        // Manual positioning: when user edits current_x/current_y, optionally teleport so it actually renders near the player.
+        if (useManualPosition && autoTeleportOnManualChange)
+        {
+            if (!_hadManualApplied || _lastManualX != current_x || _lastManualY != current_y)
+            {
+                _lastManualX = current_x;
+                _lastManualY = current_y;
+                _hadManualApplied = true;
+
+                TeleportToChunk(current_x, current_y);
+                // TeleportToChunk already calls UpdateChunksImmediate(). We can skip the rest of this frame.
+                return;
+            }
+        }
+        else
+        {
+            _hadManualApplied = false;
+        }
+
         // 1. World Shift Check
         if (Mathf.Abs(player.position.x) > floatingOriginThreshold || Mathf.Abs(player.position.z) > floatingOriginThreshold)
         {
@@ -162,15 +218,21 @@ public class InfinityRenderChunks : MonoBehaviour
         long pX = (long)Math.Floor(playerAbsPos.x / chunkSize);
         long pZ = (long)Math.Floor(playerAbsPos.z / chunkSize);
         
-        // Debug
-        current_x = pX;
-        current_y = pZ;
+        // Update current position only if not using manual control
+        if (!useManualPosition)
+        {
+            current_x = pX;
+            current_y = pZ;
+        }
         _debugLocalPos = player.position;
 
         // 3. Update Chunks if changed
-        // We track a separate "lastUpdateChunk" to avoid checking dictionary every frame? 
-        // Or just lazy check. Let's just check.
-        UpdateChunks(pX, pZ);
+        // If autoTeleportOnManualChange is enabled, we still stream chunks around the *player* after teleport,
+        // so walking continues to work normally (current_x/current_y are treated as the teleport target).
+        // If autoTeleportOnManualChange is disabled, we stream around current_x/current_y directly.
+        long chunkX = (useManualPosition && !autoTeleportOnManualChange) ? current_x : pX;
+        long chunkY = (useManualPosition && !autoTeleportOnManualChange) ? current_y : pZ;
+        UpdateChunks(chunkX, chunkY);
         
         // 4. Safety
         if (enableSafety) UpdatePlayerSafety(playerAbsPos);
@@ -240,9 +302,60 @@ public class InfinityRenderChunks : MonoBehaviour
         long pX = (long)Math.Floor(playerAbsPos.x / chunkSize);
         long pZ = (long)Math.Floor(playerAbsPos.z / chunkSize);
         
-        current_x = pX; 
-        current_y = pZ;
-        UpdateChunks(pX, pZ);
+        // Update current position only if not using manual control
+        if (!useManualPosition)
+        {
+            current_x = pX; 
+            current_y = pZ;
+        }
+        
+        // Use manual position if enabled, otherwise use calculated position
+        long chunkX = (useManualPosition && !autoTeleportOnManualChange) ? current_x : pX;
+        long chunkY = (useManualPosition && !autoTeleportOnManualChange) ? current_y : pZ;
+        UpdateChunks(chunkX, chunkY);
+    }
+
+    private void ClearAllChunks()
+    {
+        foreach (var kvp in loadedChunks)
+        {
+            if (kvp.Value.gameObject != null) Destroy(kvp.Value.gameObject);
+        }
+        loadedChunks.Clear();
+    }
+
+    /// <summary>
+    /// Teleport the *virtual world* so the player is now in the specified chunk (64-bit safe).
+    /// This keeps Unity Transform positions near 0 (no float farland), while chunk coords remain long.
+    /// </summary>
+    public void TeleportToChunk(long targetChunkX, long targetChunkY)
+    {
+        if (player == null) return;
+
+        // Reset terrain around new location
+        ClearAllChunks();
+
+        // Keep local player position the same, but change the absolute (virtual) position by adjusting offset.
+        // AbsPos = cumulativeWorldOffset + localPos
+        // We want floor(AbsPos/chunkSize) == targetChunk
+        double targetAbsX = (double)targetChunkX * chunkSize;
+        double targetAbsZ = (double)targetChunkY * chunkSize;
+        cumulativeWorldOffset = new Vector3d(targetAbsX - player.position.x, 0.0, targetAbsZ - player.position.z);
+
+        // Keep debug/current fields aligned
+        current_x = targetChunkX;
+        current_y = targetChunkY;
+
+        UpdateChunksImmediate();
+    }
+
+    /// <summary>
+    /// Teleport using the currently set current_x/current_y (useful when editing in Inspector).
+    /// </summary>
+    [ContextMenu("Terrain/Teleport To Current Chunk")]
+    public void TeleportToCurrentChunk()
+    {
+        TeleportToChunk(current_x, current_y);
     }
 
     private void UnloadChunk(string key)
@@ -251,6 +364,31 @@ public class InfinityRenderChunks : MonoBehaviour
         {
             if (data.gameObject != null) Destroy(data.gameObject);
             loadedChunks.Remove(key);
+        }
+    }
+    
+    /// <summary>
+    /// Exits/unloads the chunk at the current x,y position
+    /// </summary>
+    [ContextMenu("Terrain/Exit Current Chunk")]
+    public void ExitCurrentChunk()
+    {
+        string key = $"{current_x}_{current_y}";
+        if (loadedChunks.ContainsKey(key))
+        {
+            UnloadChunk(key);
+        }
+    }
+    
+    /// <summary>
+    /// Exits/unloads a specific chunk by coordinates
+    /// </summary>
+    public void ExitChunk(long x, long y)
+    {
+        string key = $"{x}_{y}";
+        if (loadedChunks.ContainsKey(key))
+        {
+            UnloadChunk(key);
         }
     }
 
@@ -347,18 +485,20 @@ public class InfinityRenderChunks : MonoBehaviour
         // However, for this task, we assume the user accepts noise limits or we'd need a double-precision noise library.
         // Let's rely on standard float behavior for now, it's "Infinite" enough for most games.
         
-        terrainComputeShader.SetFloat("chunkX", (float)cx); 
-        terrainComputeShader.SetFloat("chunkY", (float)cy);
         terrainComputeShader.SetFloat("chunkSize", chunkSize);
         terrainComputeShader.SetInt("resolution", resolution);
         terrainComputeShader.SetFloat("heightMultiplier", heightMultiplier);
-        terrainComputeShader.SetFloat("noiseScale", noiseScale);
         terrainComputeShader.SetInt("octaves", octaves);
         terrainComputeShader.SetFloat("persistence", persistence);
         terrainComputeShader.SetFloat("lacunarity", lacunarity);
-        terrainComputeShader.SetFloat("seed", seed);
-        terrainComputeShader.SetFloat("moistureNoiseScale", 0.002f);
-        terrainComputeShader.SetFloat("temperatureNoiseScale", 0.003f);
+        terrainComputeShader.SetInt("seed", seed);
+
+        // Stable-at-infinity noise configuration (no float world coordinates in shader)
+        SetLongAsUInt2(terrainComputeShader, "chunkXLo", "chunkXHi", cx);
+        SetLongAsUInt2(terrainComputeShader, "chunkYLo", "chunkYHi", cy);
+        terrainComputeShader.SetInt("baseNoiseShift", ComputeNoiseShift(noiseScale));
+        terrainComputeShader.SetInt("moistureNoiseShift", ComputeNoiseShift(0.002f));
+        terrainComputeShader.SetInt("temperatureNoiseShift", ComputeNoiseShift(0.003f));
         terrainComputeShader.SetFloat("mountainStrength", mountainStrength);
         terrainComputeShader.SetFloat("plainStrength", plainStrength);
         terrainComputeShader.SetFloat("erosionStrength", erosionStrength);
@@ -377,90 +517,118 @@ public class InfinityRenderChunks : MonoBehaviour
         // Dispatch
         int groups = Mathf.CeilToInt(resolution / 8f);
 
-        // 1) Height
-        terrainComputeShader.SetTexture(kernelHeight, "HeightMap", heightMapA);
-        terrainComputeShader.Dispatch(kernelHeight, groups, groups, 1);
-
-        // 2) Erosion (ping-pong)
-        RenderTexture src = heightMapA;
-        RenderTexture dst = heightMapB;
-        for (int i = 0; i < erosionIterations; i++)
+        try
         {
-            terrainComputeShader.SetTexture(kernelErode, "HeightMapIn", src);
-            terrainComputeShader.SetTexture(kernelErode, "HeightMapOut", dst);
-            terrainComputeShader.Dispatch(kernelErode, groups, groups, 1);
-            RenderTexture tmp = src;
-            src = dst;
-            dst = tmp;
-        }
+            // 1) Height
+            terrainComputeShader.SetTexture(kernelHeight, "HeightMap", heightMapA);
+            terrainComputeShader.Dispatch(kernelHeight, groups, groups, 1);
 
-        // 3) Small blur to remove remaining needle peaks while preserving features
-        for (int i = 0; i < smoothIterations; i++)
+            // 2) Erosion (ping-pong)
+            RenderTexture src = heightMapA;
+            RenderTexture dst = heightMapB;
+            for (int i = 0; i < erosionIterations; i++)
+            {
+                terrainComputeShader.SetTexture(kernelErode, "HeightMapIn", src);
+                terrainComputeShader.SetTexture(kernelErode, "HeightMapOut", dst);
+                terrainComputeShader.Dispatch(kernelErode, groups, groups, 1);
+                RenderTexture tmp = src;
+                src = dst;
+                dst = tmp;
+            }
+
+            // 3) Small blur to remove remaining needle peaks while preserving features
+            for (int i = 0; i < smoothIterations; i++)
+            {
+                terrainComputeShader.SetTexture(kernelSmooth, "HeightMapIn", src);
+                terrainComputeShader.SetTexture(kernelSmooth, "HeightMapOut", dst);
+                terrainComputeShader.Dispatch(kernelSmooth, groups, groups, 1);
+                RenderTexture tmp = src;
+                src = dst;
+                dst = tmp;
+            }
+
+            // 4) Biome map from final height
+            terrainComputeShader.SetTexture(kernelBiome, "HeightMap", src);
+            terrainComputeShader.SetTexture(kernelBiome, "BiomeMap", biomeMap);
+            terrainComputeShader.Dispatch(kernelBiome, groups, groups, 1);
+
+            // 5) Normals/Mesh from final height
+            terrainComputeShader.SetTexture(kernelNormal, "HeightMap", src);
+            terrainComputeShader.SetBuffer(kernelNormal, "Normals", normalBuffer);
+            terrainComputeShader.Dispatch(kernelNormal, groups, groups, 1);
+
+            terrainComputeShader.SetTexture(kernelMesh, "HeightMap", src);
+            terrainComputeShader.SetBuffer(kernelMesh, "Vertices", vertBuffer);
+            terrainComputeShader.SetBuffer(kernelMesh, "UVs", uvBuffer);
+            terrainComputeShader.SetBuffer(kernelMesh, "Triangles", triBuffer);
+            terrainComputeShader.Dispatch(kernelMesh, groups, groups, 1);
+
+            // Readback
+            Vector3[] vertices = new Vector3[vertCount];
+            vertBuffer.GetData(vertices);
+            
+            Vector2[] uvs = new Vector2[vertCount];
+            uvBuffer.GetData(uvs);
+            
+            Vector3[] normals = new Vector3[vertCount];
+            normalBuffer.GetData(normals);
+            
+            int[] triangles = new int[(resolution - 1) * (resolution - 1) * 6];
+            triBuffer.GetData(triangles);
+
+            // Validate GPU output to avoid spamming Mesh errors if a kernel failed to dispatch/compile
+            for (int i = 0; i < Mathf.Min(vertices.Length, 256); i++)
+            {
+                Vector3 v = vertices[i];
+                if (float.IsNaN(v.x) || float.IsNaN(v.y) || float.IsNaN(v.z) ||
+                    float.IsInfinity(v.x) || float.IsInfinity(v.y) || float.IsInfinity(v.z))
+                {
+                    Debug.LogError($"GPU mesh data invalid (NaN/Inf) for chunk {cx}_{cy}. Skipping mesh build. Check compute shader compile errors in Console.");
+                    return;
+                }
+            }
+
+            for (int i = 0; i < triangles.Length; i++)
+            {
+                int t = triangles[i];
+                if ((uint)t >= (uint)vertCount)
+                {
+                    Debug.LogError($"GPU triangle index out of bounds for chunk {cx}_{cy} (tri[{i}]={t}, vertCount={vertCount}). Skipping mesh build. Check compute shader compile errors in Console.");
+                    return;
+                }
+            }
+
+            Mesh mesh = new Mesh();
+            if (vertCount > 65535) mesh.indexFormat = IndexFormat.UInt32;
+            mesh.vertices = vertices;
+            mesh.uv = uvs;
+            mesh.normals = normals;
+            mesh.triangles = triangles;
+            mesh.RecalculateBounds();
+            
+            MeshFilter mf = data.gameObject.AddComponent<MeshFilter>();
+            MeshRenderer mr = data.gameObject.AddComponent<MeshRenderer>();
+            MeshCollider mc = data.gameObject.AddComponent<MeshCollider>();
+            
+            mf.mesh = mesh;
+            mr.material = terrainMaterial;
+            // Update material properties
+            UpdateMaterialProperties();
+            mc.sharedMesh = mesh;
+            
+            data.isReady = true;
+        }
+        finally
         {
-            terrainComputeShader.SetTexture(kernelSmooth, "HeightMapIn", src);
-            terrainComputeShader.SetTexture(kernelSmooth, "HeightMapOut", dst);
-            terrainComputeShader.Dispatch(kernelSmooth, groups, groups, 1);
-            RenderTexture tmp = src;
-            src = dst;
-            dst = tmp;
+            // Always release GPU resources
+            heightMapA.Release();
+            heightMapB.Release();
+            biomeMap.Release();
+            vertBuffer.Release();
+            uvBuffer.Release();
+            normalBuffer.Release();
+            triBuffer.Release();
         }
-
-        // 4) Biome map from final height
-        terrainComputeShader.SetTexture(kernelBiome, "HeightMap", src);
-        terrainComputeShader.SetTexture(kernelBiome, "BiomeMap", biomeMap);
-        terrainComputeShader.Dispatch(kernelBiome, groups, groups, 1);
-
-        // 5) Normals/Mesh/Veg from final height
-        terrainComputeShader.SetTexture(kernelNormal, "HeightMap", src);
-        terrainComputeShader.SetBuffer(kernelNormal, "Normals", normalBuffer);
-        terrainComputeShader.Dispatch(kernelNormal, groups, groups, 1);
-
-        terrainComputeShader.SetTexture(kernelMesh, "HeightMap", src);
-        terrainComputeShader.SetBuffer(kernelMesh, "Vertices", vertBuffer);
-        terrainComputeShader.SetBuffer(kernelMesh, "UVs", uvBuffer);
-        terrainComputeShader.SetBuffer(kernelMesh, "Triangles", triBuffer);
-        terrainComputeShader.Dispatch(kernelMesh, groups, groups, 1);
-
-        // Readback
-        Vector3[] vertices = new Vector3[vertCount];
-        vertBuffer.GetData(vertices);
-        
-        Vector2[] uvs = new Vector2[vertCount];
-        uvBuffer.GetData(uvs);
-        
-        Vector3[] normals = new Vector3[vertCount];
-        normalBuffer.GetData(normals);
-        
-        int[] triangles = new int[(resolution - 1) * (resolution - 1) * 6];
-        triBuffer.GetData(triangles);
-
-        Mesh mesh = new Mesh();
-        if (vertCount > 65535) mesh.indexFormat = IndexFormat.UInt32;
-        mesh.vertices = vertices;
-        mesh.uv = uvs;
-        mesh.normals = normals;
-        mesh.triangles = triangles;
-        mesh.RecalculateBounds();
-        
-        MeshFilter mf = data.gameObject.AddComponent<MeshFilter>();
-        MeshRenderer mr = data.gameObject.AddComponent<MeshRenderer>();
-        MeshCollider mc = data.gameObject.AddComponent<MeshCollider>();
-        
-        mf.mesh = mesh;
-        mr.material = terrainMaterial;
-        // Update material properties
-        UpdateMaterialProperties();
-        mc.sharedMesh = mesh;
-
-        heightMapA.Release();
-        heightMapB.Release();
-        biomeMap.Release();
-        vertBuffer.Release();
-        uvBuffer.Release();
-        normalBuffer.Release();
-        triBuffer.Release();
-        
-        data.isReady = true;
     }
     
     // CPU Noise for Safety
@@ -482,7 +650,7 @@ public class InfinityRenderChunks : MonoBehaviour
         else
         {
             // Fallback to approximated height if raycast doesn't hit (terrain might not be loaded)
-            actualTerrainHeight = GetTerrainHeightCPU((float)playerAbsPos.x, (float)playerAbsPos.z);
+            actualTerrainHeight = GetTerrainHeightCPU(playerAbsPos.x, playerAbsPos.z);
         }
         
         // Get player velocity to check if jumping
@@ -504,71 +672,96 @@ public class InfinityRenderChunks : MonoBehaviour
         }
     }
 
-    private float GetTerrainHeightCPU(float worldX, float worldZ)
+    // CPU approximation for safety checks (stable at infinity; no float world coordinate dependence)
+    private static uint Hash32(uint x)
     {
-        // Simplified CPU version of the Shader Logic
-        // We only calculate the BASE FBM to get a "floor" estimate.
-        // GPU adds mountains/ridges on top, so the real terrain is usually HIGHER than this.
-        // This makes this function strictly return a "lower bound" or "average", 
-        // which matches well with the "fall through" check (player < height).
-        // If real height is +50 (Mountain) and we calculate +10 (Base), the check (-20) might fail if player is at +30?
-        // Wait, if Player is at +30 (on mountain) and CPU thinks height is +10.
-        // Player < 10 - 20 = -10? False. Safe.
-        // If Player falls to -50. -50 < -10. True. Reset.
-        // So under-estimating height is SAFE for a "fall prevention" check. 
-        // Checks might be LATE, but never EARLY (Resetting while walking).
-        
-        Vector2 worldPos = new Vector2(worldX, worldZ);
-        Vector2 noisePos = (worldPos + new Vector2(seed * 100.0f, seed * 100.0f)) * noiseScale;
-        
-        float continents = Fbm(noisePos * 0.1f, 3, 0.5f, 2.0f);
-        
-        float height = 0;
-        if (continents < 0.3f) height = continents * 0.8f;
-        else height = continents;
-        
-        // Add a small buffer for mountains approximation without expensive calls
-        if (continents > 0.6f) height += 0.2f * mountainStrength; 
-        
-        return height * heightMultiplier;
+        x ^= x >> 16;
+        x *= 0x7feb352d;
+        x ^= x >> 15;
+        x *= 0x846ca68b;
+        x ^= x >> 16;
+        return x;
     }
-    
-    private float Fbm(Vector2 st, int oct, float pers, float lac)
+
+    private static uint HashCombine(uint h, uint v)
     {
-        float value = 0.0f;
+        unchecked
+        {
+            return Hash32(h ^ (v + 0x9e3779b9u + (h << 6) + (h >> 2)));
+        }
+    }
+
+    private static float HashTo01(uint h) => (h & 0x00FFFFFFu) / 16777216.0f;
+
+    private static float Hash2D64(ulong x, ulong y, uint salt)
+    {
+        uint h = Hash32(salt);
+        h = HashCombine(h, (uint)x);
+        h = HashCombine(h, (uint)(x >> 32));
+        h = HashCombine(h, (uint)y);
+        h = HashCombine(h, (uint)(y >> 32));
+        return HashTo01(h);
+    }
+
+    private static float ValueNoise64(ulong gx, ulong gz, int shift, uint salt)
+    {
+        shift = Mathf.Clamp(shift, 0, 30);
+        if (shift == 0) return Hash2D64(gx, gz, salt);
+
+        ulong mask = (1ul << shift) - 1ul;
+        float fx = (gx & mask) / (float)(1ul << shift);
+        float fz = (gz & mask) / (float)(1ul << shift);
+        float ux = fx * fx * (3f - 2f * fx);
+        float uz = fz * fz * (3f - 2f * fz);
+
+        ulong cellX = gx >> shift;
+        ulong cellZ = gz >> shift;
+
+        float a = Hash2D64(cellX, cellZ, salt);
+        float b = Hash2D64(cellX + 1ul, cellZ, salt);
+        float c = Hash2D64(cellX, cellZ + 1ul, salt);
+        float d = Hash2D64(cellX + 1ul, cellZ + 1ul, salt);
+
+        float ab = Mathf.Lerp(a, b, ux);
+        float cd = Mathf.Lerp(c, d, ux);
+        return Mathf.Lerp(ab, cd, uz);
+    }
+
+    private static float Fbm64(ulong gx, ulong gz, int baseShift, int oct, float pers, uint saltBase)
+    {
+        float value = 0f;
         float amplitude = 0.5f;
-        float frequency = 1.0f;
-        float maxValue = 0.0f;
+        float maxValue = 0f;
 
         for (int i = 0; i < oct; i++)
         {
-            value += amplitude * Noise(st * frequency);
+            int s = Mathf.Max(0, baseShift - i);
+            value += amplitude * ValueNoise64(gx, gz, s, saltBase + (uint)(i * 1013));
             maxValue += amplitude;
-            st += new Vector2(100.0f, 100.0f);
-            frequency *= lac;
             amplitude *= pers;
         }
-        return value / maxValue;
+
+        return value / Mathf.Max(maxValue, 1e-6f);
     }
 
-    private float Noise(Vector2 st)
+    private float GetTerrainHeightCPU(double worldX, double worldZ)
     {
-        Vector2 i = new Vector2(Mathf.Floor(st.x), Mathf.Floor(st.y));
-        Vector2 f = new Vector2(st.x - i.x, st.y - i.y);
-        float a = RandomNoise(i);
-        float b = RandomNoise(i + new Vector2(1.0f, 0.0f));
-        float c = RandomNoise(i + new Vector2(0.0f, 1.0f));
-        float d = RandomNoise(i + new Vector2(1.0f, 1.0f));
-        Vector2 u = new Vector2(f.x * f.x * (3.0f - 2.0f * f.x), f.y * f.y * (3.0f - 2.0f * f.y));
-        return Mathf.Lerp(a, b, u.x) + (c - a) * u.y * (1.0f - u.x) + (d - b) * u.x * u.y;
+        // Match the shader's integer vertex-grid space (approximation).
+        double stepWorld = chunkSize / (double)(resolution - 1);
+        long gxI = (long)Math.Round(worldX / stepWorld);
+        long gzI = (long)Math.Round(worldZ / stepWorld);
+
+        ulong gx = unchecked((ulong)gxI);
+        ulong gz = unchecked((ulong)gzI);
+
+        uint s0 = Hash32((uint)seed ^ 0xA341316Cu);
+        float continents = Fbm64(gx, gz, ComputeNoiseShift(noiseScale) + 4, 3, 0.5f, s0);
+
+        float height01 = (continents < 0.30f) ? (continents * 0.80f) : continents;
+        if (continents > 0.6f) height01 += 0.2f * mountainStrength;
+
+        return Mathf.Clamp01(height01) * heightMultiplier;
     }
-    
-    private float RandomNoise(Vector2 st)
-    {
-        return Frac(Mathf.Sin(Vector2.Dot(st, new Vector2(12.9898f, 78.233f))) * 43758.5453123f);
-    }
-    
-    private float Frac(float v) { return v - Mathf.Floor(v); }
 
     private void OnDestroy()
     {

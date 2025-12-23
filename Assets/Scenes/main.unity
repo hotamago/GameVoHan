@@ -199,7 +199,7 @@ Transform:
   m_GameObject: {fileID: 86797382}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 500, z: 0}
+  m_LocalPosition: {x: 0, y: 1500, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -326,7 +326,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PlayerController
   moveSpeed: 100
-  jumpForce: 20
+  jumpForce: 30
   lookSensitivity: 0.5
   cameraDistance: 10
   minVerticalAngle: -80
@@ -361,30 +361,32 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderChunks
   player: {fileID: 86797383}
-  chunkSize: 500
-  renderDistance: 2
-  seed: 0
-  floatingOriginThreshold: 500
-  current_x: 0
-  current_y: 0
+  chunkSize: 1000
+  renderDistance: 1
+  seed: 8386
+  floatingOriginThreshold: 100
+  useManualPosition: 1
+  autoTeleportOnManualChange: 1
+  current_x: 3455345435
+  current_y: 94589271034
   _debugLocalPos: {x: 0, y: 0, z: 0}
   enableSafety: 1
   safetyHeightOffset: 10
   groundCheckDistance: 0.5
   resolution: 200
-  heightMultiplier: 500
-  noiseScale: 0.01
+  heightMultiplier: 1500
+  noiseScale: 0.005
   octaves: 8
   persistence: 0.5
   lacunarity: 2
-  mountainStrength: 0.8
-  plainStrength: 0.6
-  erosionStrength: 0.2
+  mountainStrength: 0.3
+  plainStrength: 0.25
+  erosionStrength: 0.05
   domainWarpStrength: 2
-  waterLevel: 0.32
-  beachLevel: 0.35
-  grassLevel: 0.4
-  rockLevel: 0.75
+  waterLevel: 0.4
+  beachLevel: 0.45
+  grassLevel: 0.6
+  rockLevel: 0.8
   snowLevel: 0.9
   terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
   proceduralTerrainShader: {fileID: 4800000, guid: 3496a8c2308eae241a457749b5ec9a2a, type: 3}
@@ -462,8 +464,8 @@ Camera:
     width: 1
     height: 1
   near clip plane: 0.3
-  far clip plane: 1000
-  field of view: 60
+  far clip plane: 2000
+  field of view: 90
   orthographic: 0
   orthographic size: 5
   m_Depth: -1

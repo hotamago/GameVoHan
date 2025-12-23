@@ -4,21 +4,27 @@
 #pragma kernel SmoothHeightmap
 #pragma kernel CalculateNormals
 #pragma kernel GenerateMesh
-#pragma kernel PlaceVegetation
 
 // --- Inputs ---
-float chunkX;
-float chunkY;
+// 64-bit chunk coordinates (two's complement) passed as uint hi/lo parts.
+// This avoids float precision issues at extreme distances.
+uint chunkXLo;
+uint chunkXHi;
+uint chunkYLo;
+uint chunkYHi;
 float chunkSize;
 int resolution;
 float heightMultiplier;
-float noiseScale;
 int octaves;
 float persistence;
 float lacunarity;
-float seed;
-float moistureNoiseScale;
-float temperatureNoiseScale;
+int seed;
+
+// Noise scale expressed as "power-of-two cell size in vertex-grid units".
+// Larger shift => larger features. This stays stable forever because it uses integer math.
+int baseNoiseShift;
+int moistureNoiseShift;
+int temperatureNoiseShift;
 
 // Advanced terrain parameters
 float mountainStrength;
@@ -43,149 +49,185 @@ RWStructuredBuffer<int> Triangles;
 Texture2D<float> HeightMapIn;
 RWTexture2D<float> HeightMapOut;
 
-struct VegetationInstance {
-    float3 position;
-    float3 scale;
-    float rotationY;
-    int typeID; // 0=Tree, 1=Rock, 2=Grass
-};
-AppendStructuredBuffer<VegetationInstance> VegetationBuffer;
 
 // --- Helper Functions ---
-// --- New Noise Functions ---
-
-// 2D Random
-float2 random2(float2 p) {
-    return frac(sin(float2(dot(p,float2(127.1,311.7)),dot(p,float2(269.5,183.3))))*43758.5453);
+// --- 64-bit stable noise (no float world coords) ---
+uint Hash32(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352d;
+    x ^= x >> 15;
+    x *= 0x846ca68b;
+    x ^= x >> 16;
+    return x;
 }
 
-// 2D Noise
-float random(float2 st) {
-    return frac(sin(dot(st.xy, float2(12.9898, 78.233))) * 43758.5453123);
+uint HashCombine(uint h, uint v)
+{
+    // Simple avalanche combine
+    return Hash32(h ^ (v + 0x9e3779b9u + (h << 6) + (h >> 2)));
 }
 
-float noise(float2 st) {
-    float2 i = floor(st);
-    float2 f = frac(st);
-    float a = random(i);
-    float b = random(i + float2(1.0, 0.0));
-    float c = random(i + float2(0.0, 1.0));
-    float d = random(i + float2(1.0, 1.0));
+float HashTo01(uint h)
+{
+    // 24-bit mantissa fraction
+    return (float)(h & 0x00FFFFFFu) / 16777216.0;
+}
+
+uint2 AddU64(uint2 a, uint2 b)
+{
+    uint lo = a.x + b.x;
+    uint carry = (lo < a.x) ? 1u : 0u;
+    uint hi = a.y + b.y + carry;
+    return uint2(lo, hi);
+}
+
+uint2 AddU64_U32(uint2 a, uint b)
+{
+    uint lo = a.x + b;
+    uint carry = (lo < a.x) ? 1u : 0u;
+    return uint2(lo, a.y + carry);
+}
+
+uint2 MulU64_U32(uint2 a, uint b)
+{
+    // Multiply 64-bit (hi,lo) by 32-bit b.
+    // In this project, b is always small (< 2^16) because it is (resolution-1),
+    // so we can compute the high 32 bits without umulExtended (better cross-platform support).
+    uint aLo = a.x;
+    uint aHi = a.y;
+
+    uint a0 = aLo & 0xFFFFu;
+    uint a1 = aLo >> 16;
+
+    uint p0 = a0 * b; // <= 32 bits
+    uint p1 = a1 * b; // <= 32 bits
+
+    uint lo = p0 + (p1 << 16);
+    uint carry = (lo < p0) ? 1u : 0u;
+
+    uint hi = (p1 >> 16) + carry;
+    hi += aHi * b;
+
+    return uint2(lo, hi);
+}
+
+uint2 ShrU64(uint2 v, uint s)
+{
+    // In this project, shifts are clamped to [0..30] from C#
+    if (s == 0) return v;
+    uint lo = (v.x >> s) | (v.y << (32u - s));
+    uint hi = (v.y >> s);
+    return uint2(lo, hi);
+}
+
+float Hash2D64(uint2 x, uint2 y, uint salt)
+{
+    uint h = Hash32(salt);
+    h = HashCombine(h, x.x);
+    h = HashCombine(h, x.y);
+    h = HashCombine(h, y.x);
+    h = HashCombine(h, y.y);
+    return HashTo01(h);
+}
+
+float ValueNoise64(uint2 gx, uint2 gz, int shift, uint salt)
+{
+    shift = max(0, min(30, shift));
+    if (shift == 0)
+    {
+        // Cell size = 1 vertex; no interpolation possible.
+        // Bias signed coords so (-1,0) is adjacent to (0,0) in integer space.
+        uint2 bx = uint2(gx.x, gx.y ^ 0x80000000u);
+        uint2 bz = uint2(gz.x, gz.y ^ 0x80000000u);
+        return Hash2D64(bx, bz, salt);
+    }
+
+    // Bias signed coords so negative/positive coordinates are continuous across 0.
+    uint2 bgx = uint2(gx.x, gx.y ^ 0x80000000u);
+    uint2 bgz = uint2(gz.x, gz.y ^ 0x80000000u);
+
+    uint mask = (1u << (uint)shift) - 1u;
+    float fx = (float)(bgx.x & mask) / (float)(1u << (uint)shift);
+    float fz = (float)(bgz.x & mask) / (float)(1u << (uint)shift);
+    float2 f = float2(fx, fz);
     float2 u = f * f * (3.0 - 2.0 * f);
-    return lerp(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+
+    uint2 cellX = ShrU64(bgx, (uint)shift);
+    uint2 cellZ = ShrU64(bgz, (uint)shift);
+
+    float a = Hash2D64(cellX, cellZ, salt);
+    float b = Hash2D64(AddU64_U32(cellX, 1u), cellZ, salt);
+    float c = Hash2D64(cellX, AddU64_U32(cellZ, 1u), salt);
+    float d = Hash2D64(AddU64_U32(cellX, 1u), AddU64_U32(cellZ, 1u), salt);
+
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
 }
 
-// IQ's Voronoi Noise
-float voronoi(float2 x) {
-    float2 n = floor(x);
-    float2 f = frac(x);
-    float m = 8.0;
-    for(int j=-1; j<=1; j++)
-    for(int i=-1; i<=1; i++) {
-        float2 g = float2(float(i),float(j));
-        float2 o = random2(n + g);
-        o = 0.5 + 0.5*sin(6.2831*o); // Animate? No, static for terrain
-        float2 r = g + o - f;
-        float d = dot(r,r);
-        if( d<m ) m=d;
-    }
-    return m;
-}
-
-// Hybrid Multifractal - Good for mountains
-float hybridMultifractal(float2 st, int oct, float H, float lac) {
-    float value = 1.0;
-    float signal = 0.0;
-    float frequency = 1.0;
-    float weight = 1.0;
-    
-    // 1st Octave
-    signal = (1.0 - abs(noise(st) * 2.0 - 1.0));
-    signal *= signal;
-    value = signal;
-    weight = 1.0;
-    
-    st *= lac;
-    
-    // Remaining Octaves
-    for (int i = 1; i < oct; i++) {
-        weight = clamp(signal * 2.0, 0.0, 1.0); // Signal from previous octave affects weight
-        signal = (1.0 - abs(noise(st) * 2.0 - 1.0));
-        signal *= signal;
-        signal *= weight;
-        
-        value += signal * pow(frequency, -H);
-        frequency *= lac;
-        st *= lac;
-    }
-    return value * 0.5; // Normalize roughly
-}
-
-float fbm(float2 st, int oct, float pers, float lac) {
+float Fbm64(uint2 gx, uint2 gz, int baseShift, int oct, float pers, uint saltBase)
+{
     float value = 0.0;
     float amplitude = 0.5;
-    float frequency = 1.0;
     float maxValue = 0.0;
-    for (int i = 0; i < oct; i++) {
-        value += amplitude * noise(st * frequency);
+
+    for (int i = 0; i < oct; i++)
+    {
+        int s = max(0, baseShift - i); // lacunarity ~= 2 by shifting
+        value += amplitude * ValueNoise64(gx, gz, s, saltBase + (uint)(i * 1013));
         maxValue += amplitude;
-        frequency *= lac;
         amplitude *= pers;
     }
-    return value / maxValue;
+
+    return value / max(maxValue, 1e-6);
 }
 
-// Ridged FBM - smoother mountain ranges than raw voronoi inversion
-float ridgedFbm(float2 st, int oct, float pers, float lac) {
+float RidgedFbm64(uint2 gx, uint2 gz, int baseShift, int oct, float pers, uint saltBase)
+{
     float value = 0.0;
     float amplitude = 0.5;
-    float frequency = 1.0;
     float maxValue = 0.0;
     float prev = 1.0;
-    for (int i = 0; i < oct; i++) {
-        float n = noise(st * frequency);
-        float r = 1.0 - abs(n * 2.0 - 1.0); // ridge
-        r *= r; // sharpen ridge while keeping smooth slopes
+
+    for (int i = 0; i < oct; i++)
+    {
+        int s = max(0, baseShift - i);
+        float n = ValueNoise64(gx, gz, s, saltBase + (uint)(i * 1583));
+        float r = 1.0 - abs(n * 2.0 - 1.0);
+        r *= r;
         value += r * amplitude * prev;
         maxValue += amplitude;
         prev = r;
-        frequency *= lac;
         amplitude *= pers;
     }
-    return value / maxValue;
+
+    return value / max(maxValue, 1e-6);
 }
 
-float2 domainWarp(float2 p, float strength) {
-    float2 q = float2(
-        fbm(p + float2(0.0, 0.0), 4, 0.5, 2.0),
-        fbm(p + float2(5.2, 1.3), 4, 0.5, 2.0)
-    );
-    return p + q * strength;
-}
+float GetHeightFromGrid(uint2 gx, uint2 gz)
+{
+    // Derive stable salts from seed (seed is int, can be negative)
+    uint s0 = Hash32((uint)seed ^ 0xA341316Cu);
+    uint s1 = Hash32((uint)seed ^ 0xC8013EA4u);
+    uint s2 = Hash32((uint)seed ^ 0xAD90777Du);
 
-float GetHeight(float2 worldPos) {
-    float2 noisePos = (worldPos + float2(seed * 100.0, seed * 100.0)) * noiseScale;
+    // Continents: much larger features
+    float continents = Fbm64(gx, gz, baseNoiseShift + 4, 4, 0.5, s0);
 
-    // Domain warp: use user parameter, but scale to noise-space (defaults in inspector are in "human" range)
-    float warp = domainWarpStrength * 0.25;
-    float2 p = domainWarp(noisePos, warp);
+    // Hills: mid-scale signed variation
+    float hills = Fbm64(gx, gz, baseNoiseShift + 1, max(3, octaves - 1), persistence, s1);
+    float hillsSigned = (hills * 2.0 - 1.0) * 0.18;
 
-    // 1) Continents / macro shape
-    float continents = fbm(p * 0.10, 4, 0.5, 2.0);
-
-    // 2) Hills (signed, subtle)
-    float hills = fbm(p * 0.85, max(3, octaves - 1), persistence, lacunarity);
-    float hillsSigned = (hills * 2.0 - 1.0) * 0.18; // [-0.18..0.18]
-
-    // 3) Mountains (ridged)
-    float ridges = ridgedFbm(p * 1.65, min(octaves, 6), 0.5, 2.0);
+    // Mountains: ridged detail
+    float ridges = RidgedFbm64(gx, gz, baseNoiseShift, min(octaves, 6), 0.5, s2);
 
     float height01 = 0.0;
 
-    // Ocean / beach band is kept close to old thresholds for biome consistency
-    if (continents < 0.30) {
+    if (continents < 0.30)
+    {
         height01 = continents * 0.80;
-    } else {
+    }
+    else
+    {
         float landMask = smoothstep(0.30, 0.40, continents);
         float mtnMask = smoothstep(0.58, 0.80, continents);
 
@@ -194,7 +236,6 @@ float GetHeight(float2 worldPos) {
         height01 += ridges * mtnMask * mountainStrength * 0.90;
     }
 
-    // Clamp to keep biome thresholds stable and prevent rare blow-ups into spikes
     height01 = saturate(height01);
     return height01 * heightMultiplier;
 }
@@ -222,16 +263,16 @@ void GenerateHeightmap (uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
 
-    float step = chunkSize / (float)(resolution - 1);
-    
-    // Ensure edge positions are exactly aligned for seamless chunks
-    // For the last vertex in each dimension, use exact chunkSize to avoid rounding errors
-    float localX = (id.x == (uint)(resolution - 1)) ? chunkSize : (id.x * step);
-    float localZ = (id.y == (uint)(resolution - 1)) ? chunkSize : (id.y * step);
-    float2 localPos = float2(localX, localZ);
-    float2 worldPos = float2(chunkX * chunkSize, chunkY * chunkSize) + localPos;
+    // Build a global *integer* vertex-grid coordinate:
+    // gridX = chunkX * (resolution-1) + id.x
+    // gridZ = chunkY * (resolution-1) + id.y
+    uint2 chunkX64 = uint2(chunkXLo, chunkXHi);
+    uint2 chunkY64 = uint2(chunkYLo, chunkYHi);
+    uint vertsPerChunk = (uint)(resolution - 1);
+    uint2 gx = AddU64_U32(MulU64_U32(chunkX64, vertsPerChunk), id.x);
+    uint2 gz = AddU64_U32(MulU64_U32(chunkY64, vertsPerChunk), id.y);
 
-    float height = GetHeight(worldPos);
+    float height = GetHeightFromGrid(gx, gz);
 
     HeightMap[id.xy] = height;
 }
@@ -241,19 +282,19 @@ void GenerateBiomeMap (uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
 
-    float step = chunkSize / (float)(resolution - 1);
-    
-    // Ensure edge positions are exactly aligned for seamless chunks
-    float localX = (id.x == (uint)(resolution - 1)) ? chunkSize : (id.x * step);
-    float localZ = (id.y == (uint)(resolution - 1)) ? chunkSize : (id.y * step);
-    float2 localPos = float2(localX, localZ);
-    float2 worldPos = float2(chunkX * chunkSize, chunkY * chunkSize) + localPos;
-
     float height = HeightMap[id.xy];
 
     // Moisture & Temp noise
-    float moisture = fbm((worldPos + seed * 500.0) * moistureNoiseScale, 4, 0.5, 2.0);
-    float temp = fbm((worldPos + seed * 800.0) * temperatureNoiseScale, 4, 0.5, 2.0);
+    uint2 chunkX64 = uint2(chunkXLo, chunkXHi);
+    uint2 chunkY64 = uint2(chunkYLo, chunkYHi);
+    uint vertsPerChunk = (uint)(resolution - 1);
+    uint2 gx = AddU64_U32(MulU64_U32(chunkX64, vertsPerChunk), id.x);
+    uint2 gz = AddU64_U32(MulU64_U32(chunkY64, vertsPerChunk), id.y);
+
+    uint sm = Hash32((uint)seed ^ 0x3C6EF372u);
+    uint st = Hash32((uint)seed ^ 0xBB67AE85u);
+    float moisture = Fbm64(gx, gz, moistureNoiseShift, 4, 0.5, sm);
+    float temp = Fbm64(gx, gz, temperatureNoiseShift, 4, 0.5, st);
 
     // Temperature varies with height (higher = colder)
     float heightNorm = height / heightMultiplier;
@@ -360,71 +401,3 @@ void GenerateMesh (uint3 id : SV_DispatchThreadID)
     }
 }
 
-[numthreads(8, 8, 1)]
-void PlaceVegetation (uint3 id : SV_DispatchThreadID)
-{
-    if (id.x >= (uint)resolution || id.y >= (uint)resolution) return;
-    
-    // Read cached values
-    float height = HeightMap[id.xy];
-    float4 biomeData = BiomeMap[id.xy];
-    float biome = biomeData.x;
-    float moisture = biomeData.y;
-    
-    // Random check - use exact positioning to match mesh vertices
-    float step = chunkSize / (float)(resolution - 1);
-    float localX = (id.x == (uint)(resolution - 1)) ? chunkSize : (id.x * step);
-    float localZ = (id.y == (uint)(resolution - 1)) ? chunkSize : (id.y * step);
-    float2 worldPos = float2(chunkX * chunkSize, chunkY * chunkSize) + float2(localX, localZ);
-    float rng = random(worldPos * 1.23); // New random seed per pos
-    
-    float heightNorm = height / heightMultiplier;
-    float slope = 1.0 - Normals[id.x + id.y * resolution].y;
-
-    if (heightNorm < 0.22) return; // Underwater/Beach
-    if (slope > 0.45) return; // Too steep
-
-    // Spawning logic
-    VegetationInstance inst;
-    inst.position = Vertices[id.x + id.y * resolution];
-    inst.scale = float3(1, 1, 1) * (0.8 + rng * 0.4);
-    inst.rotationY = rng * 360.0;
-    
-    // Forest: Trees
-    if (biome == 4.0) { // Forest
-        if (rng > 0.97) { // 3% chance per vertex
-             inst.typeID = 0; // Tree
-             VegetationBuffer.Append(inst);
-             return;
-        }
-    }
-    
-    // Grassland: Some trees and grass
-    if (biome == 3.0) {
-        if (rng > 0.995) { // 0.5% chance for trees
-            inst.typeID = 0; // Tree
-            VegetationBuffer.Append(inst);
-            return;
-        }
-    }
-    
-    // Everywhere suitable: Grass
-    if (biome == 2.0 || biome == 3.0 || biome == 4.0) { // Plains, Grassland, Forest
-        if (rng > 0.75 && rng < 0.92) { // 17% chance
-            inst.typeID = 2; // Grass
-            // Slightly randomize position off-grid
-            inst.position.x += (rng - 0.5) * 2.0;
-            inst.position.z += (random(worldPos*2.0) - 0.5) * 2.0;
-            VegetationBuffer.Append(inst);
-        }
-    }
-    
-    // Mountains: Rocks
-    if (biome == 5.0 || biome == 6.0 || slope > 0.25) { // Mountain, Snow, or steep
-         if (rng > 0.98) { // 2% chance
-             inst.typeID = 1; // Rock
-             inst.scale = float3(1, 1, 1) * (0.5 + rng * 1.0); // Vary rock size more
-             VegetationBuffer.Append(inst);
-         }
-    }
-}
