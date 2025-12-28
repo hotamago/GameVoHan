@@ -361,7 +361,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 23cb5881119bef541bf224c9a669be60, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderChunks
-  useUnityTerrain: 1
   player: {fileID: 86797383}
   chunkSize: 200
   renderDistance: 10
@@ -455,6 +454,8 @@ MonoBehaviour:
   erosionStrength: 0.2
   domainWarpStrength: 2
   colliderRadius: 1
+  terrainMaterialTemplate: {fileID: 0}
+  maxGenerationsPerFrame: 1
   terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
 --- !u!1 &971395975
 GameObject:
