@@ -1,5 +1,6 @@
 using UnityEditor;
 using UnityEngine;
+using InfinityTerrain.Vegetation;
 
 [CustomEditor(typeof(InfinityTerrain.InfinityRenderChunks))]
 public class InfinityRenderChunksEditor : Editor
@@ -71,6 +72,63 @@ public class InfinityRenderChunksEditor : Editor
                 }
             }
         }
+
+        EditorGUILayout.Space(10);
+        EditorGUILayout.LabelField("Vegetation Scatter", EditorStyles.boldLabel);
+        EditorGUILayout.HelpBox(
+            "Vegetation scatter spawns Idyllic prefabs on nearby high-detail chunks (mesh terrain). " +
+            "Create a VegetationScatterSettings asset and auto-fill it from the Idyllic prefabs folder.",
+            MessageType.Info);
+
+        using (new EditorGUILayout.HorizontalScope())
+        {
+            if (GUILayout.Button("Create Settings Asset", GUILayout.Height(28)))
+            {
+                CreateSettingsAssetAndAssign(t);
+            }
+
+            if (GUILayout.Button("Open Settings (if assigned)", GUILayout.Height(28)))
+            {
+                OpenSettingsIfAssigned(t);
+            }
+        }
+    }
+
+    private static void CreateSettingsAssetAndAssign(InfinityTerrain.InfinityRenderChunks t)
+    {
+        if (t == null) return;
+
+        var asset = ScriptableObject.CreateInstance<VegetationScatterSettings>();
+        string path = AssetDatabase.GenerateUniqueAssetPath("Assets/VegetationScatterSettings.asset");
+        AssetDatabase.CreateAsset(asset, path);
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+
+        Undo.RecordObject(t, "Assign VegetationScatterSettings");
+
+        // Assign via SerializedObject to avoid reflection/private-field issues
+        SerializedObject so = new SerializedObject(t);
+        SerializedProperty p = so.FindProperty("vegetationScatterSettings");
+        if (p != null)
+        {
+            p.objectReferenceValue = asset;
+            so.ApplyModifiedProperties();
+            EditorUtility.SetDirty(t);
+        }
+
+        Selection.activeObject = asset;
+        EditorGUIUtility.PingObject(asset);
+    }
+
+    private static void OpenSettingsIfAssigned(InfinityTerrain.InfinityRenderChunks t)
+    {
+        if (t == null) return;
+        SerializedObject so = new SerializedObject(t);
+        SerializedProperty p = so.FindProperty("vegetationScatterSettings");
+        if (p == null) return;
+        if (p.objectReferenceValue == null) return;
+        Selection.activeObject = p.objectReferenceValue;
+        EditorGUIUtility.PingObject(p.objectReferenceValue);
     }
 }
 

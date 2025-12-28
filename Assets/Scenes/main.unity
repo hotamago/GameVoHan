@@ -411,6 +411,10 @@ MonoBehaviour:
   waterCastShadows: 0
   waterReceiveShadows: 1
   waterSurfaceYOffset: 0.02
+  enableVegetationScatter: 1
+  vegetationScatterSettings: {fileID: 11400000, guid: 54f823a81842f0345918e4386d77ecde, type: 2}
+  vegetationRenderDistance: 2
+  vegetationOnlyMaxLod: 1
   terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
   proceduralTerrainShader: {fileID: 4800000, guid: 3496a8c2308eae241a457749b5ec9a2a, type: 3}
 --- !u!4 &953848056

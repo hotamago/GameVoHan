@@ -3,6 +3,7 @@ using System.Collections;
 using InfinityTerrain.Core;
 using InfinityTerrain.Settings;
 using InfinityTerrain.Utilities;
+using InfinityTerrain.Vegetation;
 
 namespace InfinityTerrain
 {
@@ -111,6 +112,15 @@ namespace InfinityTerrain
         [Tooltip("Optional: raise the water a bit to avoid Z-fighting at shoreline.")]
         [SerializeField] private float waterSurfaceYOffset = 0.02f;
 
+        [Header("Vegetation Scatter (Idyllic Fantasy Nature Prefabs)")]
+        [SerializeField] private bool enableVegetationScatter = true;
+        [Tooltip("Settings asset that contains prefab list + budgets. Create one via Assets/Create/InfinityTerrain/Vegetation Scatter Settings.")]
+        [SerializeField] private VegetationScatterSettings vegetationScatterSettings;
+        [Tooltip("Spawn vegetation only on base chunks within this radius (Chebyshev) from player chunk. Keep small for performance.")]
+        [SerializeField] private int vegetationRenderDistance = 2;
+        [Tooltip("If enabled, vegetation is spawned only on the highest-detail (max) LOD chunks.")]
+        [SerializeField] private bool vegetationOnlyMaxLod = true;
+
         [Header("GPU Resources")]
         [Tooltip("REQUIRED: Assign TerrainGen.compute from Assets/Resources/Shaders/ folder directly in Inspector. This ensures it's included in builds.")]
         [SerializeField] private ComputeShader terrainComputeShader;
@@ -128,6 +138,11 @@ namespace InfinityTerrain
         private WaterManager waterManager;
         private PlayerSafety playerSafety;
         private WorldOriginManager worldOriginManager;
+        private VegetationScatterManager vegetationScatterManager;
+
+        private VegetationScatterSettings _lastVegetationSettings;
+        private int _lastVegetationRenderDistance;
+        private bool _lastVegetationOnlyMaxLod;
 
         private long _runtimeChunkX;
         private long _runtimeChunkY;
@@ -280,6 +295,43 @@ namespace InfinityTerrain
             playerSafety = new PlayerSafety(playerSettings, terrainSettings, materialSettings, player);
         }
 
+        private void EnsureVegetationManager()
+        {
+            if (!enableVegetationScatter)
+            {
+                vegetationScatterManager = null;
+                return;
+            }
+
+            bool changed =
+                vegetationScatterManager == null ||
+                _lastVegetationSettings != vegetationScatterSettings ||
+                _lastVegetationRenderDistance != vegetationRenderDistance ||
+                _lastVegetationOnlyMaxLod != vegetationOnlyMaxLod;
+
+            if (!changed) return;
+
+            _lastVegetationSettings = vegetationScatterSettings;
+            _lastVegetationRenderDistance = vegetationRenderDistance;
+            _lastVegetationOnlyMaxLod = vegetationOnlyMaxLod;
+
+            vegetationScatterManager = new VegetationScatterManager(
+                terrainSettings,
+                materialSettings,
+                vegetationScatterSettings,
+                seed,
+                vegetationRenderDistance,
+                vegetationOnlyMaxLod);
+        }
+
+        private float ComputeWaterSurfaceY()
+        {
+            // If the project uses terrain water level, water plane is at (waterLevel * heightMultiplier).
+            float y = waterUseTerrainWaterLevel ? (waterLevel * heightMultiplier) : waterSurfaceY;
+            y += waterSurfaceYOffset;
+            return y;
+        }
+
         private IEnumerator PlacePlayerAboveTerrainWhenPlayerReady()
         {
             const int tries = 60;
@@ -331,6 +383,17 @@ namespace InfinityTerrain
 
             // 4. Update Water Tiles
             waterManager.UpdateWaterTiles(pX, pZ);
+
+            // 4.5 Vegetation Scatter (near chunks only)
+            EnsureVegetationManager();
+            if (vegetationScatterManager != null)
+            {
+                vegetationScatterManager.Update(
+                    pX, pZ,
+                    chunkManager.LoadedChunks,
+                    heightMultiplier,
+                    ComputeWaterSurfaceY());
+            }
 
             // 5. Player Safety
             if (enableSafety)

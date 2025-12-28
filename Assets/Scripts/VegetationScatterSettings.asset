@@ -1,0 +1,1190 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a79fb3edd18764e42ba59000929d9ffe, type: 3}
+  m_Name: VegetationScatterSettings
+  m_EditorClassIdentifier: Assembly-CSharp::InfinityTerrain.Vegetation.VegetationScatterSettings
+  seedOffset: 8386
+  minHeight01: 0.28
+  maxHeight01: 0.95
+  maxSlopeDeg: 35
+  waterExclusionYOffset: 0.5
+  treesPerChunk: 18
+  rocksPerChunk: 10
+  plantsPerChunk: 30
+  grassPerChunk: 60
+  treeMinSpacing: 6
+  rockMinSpacing: 4
+  plantMinSpacing: 1.75
+  grassMinSpacing: 0.6
+  attemptsPerSpawn: 10
+  prefabs:
+  - name: BlossomTree_01
+    category: 0
+    prefab: {fileID: 3435643351429671060, guid: fd5ab67aa510888499f842d51f660a4a, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BlossomTree_02
+    category: 0
+    prefab: {fileID: 5600971282110277387, guid: 28cb30b20402c9148881d51f5c3ceb5f, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BlossomTree_03
+    category: 0
+    prefab: {fileID: 8448477449630713223, guid: e36665c8ece995449841ccc2d4be5a64, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BlossomTree_04
+    category: 0
+    prefab: {fileID: 6808096090866134018, guid: 43eebddd43cc8914a93363658ce6cdd6, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BlossomTree_05
+    category: 0
+    prefab: {fileID: 6547305224143750733, guid: ad56e8c887f41c44eb5f929e3bb131a9, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Branch_01
+    category: 2
+    prefab: {fileID: 5905672442031324911, guid: 63f88b8ea8bdf544dadd60344ab2fe1e, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Branch_02
+    category: 2
+    prefab: {fileID: 7952631473301054624, guid: fc1beed488abe5449971353f60553ff3, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Branch_03
+    category: 2
+    prefab: {fileID: 4128392809708176480, guid: c7fbe9217e346b4418724c1cea262a68, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Branch_04
+    category: 2
+    prefab: {fileID: 9203428718595645410, guid: 258a05c3254defe4794197d1e93716c6, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Branch_05
+    category: 2
+    prefab: {fileID: 6399149115473346426, guid: 8a1e3c5a0398a4e45a13a93ec6ee4e8c, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Branch_06
+    category: 2
+    prefab: {fileID: 458321403998356466, guid: 11526bec519319b449c45d74fbbffbf6, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_01_Blue
+    category: 0
+    prefab: {fileID: 1697854971701876781, guid: d0a1dd6fb7ae56447972d0371c8b4c65, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_01_Green
+    category: 0
+    prefab: {fileID: 7736027864159789925, guid: 743b50117cc380a4f8f6871e04789159, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_01_Purple
+    category: 0
+    prefab: {fileID: 6404467551117134422, guid: 81983288ce208254aad9833574feb791, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_01_Red
+    category: 0
+    prefab: {fileID: 6193453659618800568, guid: 48787cd427c3d3f428ae28e6fef17b12, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_02_Blue
+    category: 0
+    prefab: {fileID: 3648965047641641073, guid: daacdf33cc937a04eaa0fb5ac03f8aea, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_02_Green
+    category: 0
+    prefab: {fileID: 4314097512950914008, guid: 5d6ff116fb5dd6343a053c078b5cdc2b, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_02_Purple
+    category: 0
+    prefab: {fileID: 6645419597310405158, guid: 3fb7e7b681da13a48a9ddb9674b81d22, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_02_Red
+    category: 0
+    prefab: {fileID: 863322927964328203, guid: aec7bcbf20e5d5f4fa566cabacc811c9, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_03_Blue
+    category: 0
+    prefab: {fileID: 4084909637524588779, guid: f5675ed7b23079045bce7dae043e5342, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_03_Green
+    category: 0
+    prefab: {fileID: 7755859256941194996, guid: 04edc0bffc5bee54eb107fcc8ce4385a, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_03_Purple
+    category: 0
+    prefab: {fileID: 4753570097628809075, guid: 5af90c0959d41e44bb068818a26f6974, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_03_Red
+    category: 0
+    prefab: {fileID: 5595323473854503343, guid: 03e2340891d61e94b93df31e86c00f99, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_04_Blue
+    category: 0
+    prefab: {fileID: 4067607638956020432, guid: ba23bb4142b5b844792f52daabceee09, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_04_Green
+    category: 0
+    prefab: {fileID: 8509515907140916961, guid: cd70cd855f71078438d51c2883795a0e, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_04_Purple
+    category: 0
+    prefab: {fileID: 480867892276286814, guid: 75a51e024c22f924e90e5661e918a149, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_04_Red
+    category: 0
+    prefab: {fileID: 5250618785924401589, guid: 7bc62276af2584844ac37b94286d4e3f, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_05_Blue
+    category: 0
+    prefab: {fileID: 8533252744133438722, guid: 3f7c615c00f14b5409bd59db984c3359, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_05_Green
+    category: 0
+    prefab: {fileID: 269750320397101300, guid: 776d6e523eb60be41abbfa8427ee472a, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_05_Purple
+    category: 0
+    prefab: {fileID: 4598635758027460578, guid: f0b04dd70814f7e41bcf0c316951b288, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: BroadleafTree_05_Red
+    category: 0
+    prefab: {fileID: 8450013131937564207, guid: 69757ad24b3650244986c0d352d29163, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Bush_01_01
+    category: 2
+    prefab: {fileID: 744807394742405594, guid: 9af567e72a97f044297c5f8063f6a5f3, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Bush_01_02
+    category: 2
+    prefab: {fileID: 1231459682092219524, guid: 0822ffcc2f3109548b8fabb01f0f2041, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Bush_02_01
+    category: 2
+    prefab: {fileID: 233986929952047716, guid: d8470b2d9ac17874a8c59119201e6671, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Bush_02_02
+    category: 2
+    prefab: {fileID: 3052515965135097726, guid: 8022ebd68cb5b6948be983bf7aa7b94e, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Bush_03_01
+    category: 2
+    prefab: {fileID: 7390566949429054898, guid: 18665362feb1b494fbeda66c24a91d57, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Bush_03_02
+    category: 2
+    prefab: {fileID: 676518420115694973, guid: c255a97f0f00f934fade030c353aff54, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Cattail_01
+    category: 2
+    prefab: {fileID: 1769550191730516177, guid: 4690936875b5bea46ba0689fdd3bedac, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Cattail_02
+    category: 2
+    prefab: {fileID: 4500330030634347563, guid: e7e0d1ad1da28d049a23188222db778e, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Cattail_03
+    category: 2
+    prefab: {fileID: 2534663380377478625, guid: cfca041a54545344e87ea3399b512d8a, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Cliff_01
+    category: 1
+    prefab: {fileID: 2836439255435353025, guid: a86af659c52a1f54c924985f5d11a2b9, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Cliff_02
+    category: 1
+    prefab: {fileID: 5586220953514933797, guid: 3165793d3ae6acb48863fa5e0f6d5ccb, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Cliff_03
+    category: 1
+    prefab: {fileID: 9203603020710262029, guid: ca00d4d4c0d329e4599915fdd324475f, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Cliff_04
+    category: 1
+    prefab: {fileID: 4418585035187661883, guid: 216d48b805269d24b82ee98782f87009, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Cliff_05
+    category: 1
+    prefab: {fileID: 3767358828197824249, guid: 7df3af01473dd7841ae339df250b9cd8, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Fir_01
+    category: 0
+    prefab: {fileID: 3519991192614501125, guid: 4aa7a928cc83c7d49819fe52f53ec261, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Fir_02
+    category: 0
+    prefab: {fileID: 1502869466188940898, guid: 77e842542dc470c4cacb99376e9140d7, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Fir_03
+    category: 0
+    prefab: {fileID: 3656882167978128256, guid: a5e5ef299cff96b43a90c8cfe59e376b, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Fir_04
+    category: 0
+    prefab: {fileID: 7811622897032540034, guid: 9ee7cbf1161c07f43b5e74f14c2cd00a, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Fir_05
+    category: 0
+    prefab: {fileID: 3189538578139757832, guid: ea4b22d3800ce0b46b7304dfd8f7ac78, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Flower_Blue_01
+    category: 2
+    prefab: {fileID: 7733339445370539976, guid: eae282ced33b74140b668fb902af6d44, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Flower_Blue_02
+    category: 2
+    prefab: {fileID: 6853804256271815428, guid: a22de254fda32184784881cbf3b484e1, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Flower_Orange
+    category: 2
+    prefab: {fileID: 3131909291465887847, guid: de0f9463ada7f44488e1849fdf5e1ef8, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Flower_Pink
+    category: 2
+    prefab: {fileID: 2080254620369348174, guid: 3f69ce91617ada5408f4e710ccb230eb, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Flower_Purple
+    category: 2
+    prefab: {fileID: 2977488606555035948, guid: be88ccc41855af94c9a8e89f1658ddf9, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Flower_Red
+    category: 2
+    prefab: {fileID: 329369609626562540, guid: c91f6136c646d894b86e255f5327a7ce, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Flower_White
+    category: 2
+    prefab: {fileID: 5127406509901702237, guid: 8c7bc13b48e07624cbeab19070eac416, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Flower_Yellow
+    category: 2
+    prefab: {fileID: 1793841155696690611, guid: 6cbc1a6123e1a5f42b589f21ac531d94, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Flower_YellowRed
+    category: 2
+    prefab: {fileID: 3020180637102020936, guid: 2e5167dccc642314c842bf62085fdd7f, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_Blue
+    category: 3
+    prefab: {fileID: 8731784072169870574, guid: eafd13021a73e9140961c184aa34fa00, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_BluePurple
+    category: 3
+    prefab: {fileID: 1617985805762025451, guid: 4ad67aa7f76dbf54999adee18caa9059, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_Orange
+    category: 3
+    prefab: {fileID: 8410962904435274741, guid: b00dca55598cb7d4a9317537cb0551f4, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_OrangePinkRedPurpleBlue
+    category: 3
+    prefab: {fileID: 5684919319715950946, guid: 225185975765e704faab6a0093ff4290, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_Pink
+    category: 3
+    prefab: {fileID: 7082894672342302502, guid: 705f55714e37c984b9faf8ad038e2911, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_Purple
+    category: 3
+    prefab: {fileID: 5971220078979680206, guid: b7d873a1ec278b9448b81d80554e10ac, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_PurpleRedPink
+    category: 3
+    prefab: {fileID: 6513906116521164620, guid: 01a163fcc067de347af07c22d9b5ac81, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_Red
+    category: 3
+    prefab: {fileID: 8604909777472160658, guid: 2f6c7c11a938e5d47bbadf7b5d6b0423, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_RedOrange
+    category: 3
+    prefab: {fileID: 681654301592259601, guid: a173b161a3d8ac344bf13cbd33b7aeec, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_RedPink
+    category: 3
+    prefab: {fileID: 2465042023787121405, guid: ffca0fd656ca87e4e9d6df80df47e038, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_RedPurple
+    category: 3
+    prefab: {fileID: 4432624156799450269, guid: 9271bb9f2906db34baeb4f659e22c8d3, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: FlowerMeadow_White
+    category: 3
+    prefab: {fileID: 3577468017914576831, guid: b2ff11a6d1fff784cad98df357c7c6d3, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Grass_01
+    category: 3
+    prefab: {fileID: 2532886251314913023, guid: 954b7a467a8ef9341bd209a76d738cb9, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Grass_02
+    category: 3
+    prefab: {fileID: 7572530193493797500, guid: 28e7215f7f3d4af479961532235129be, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Grass_03
+    category: 3
+    prefab: {fileID: 2748314027582345112, guid: af43153991420fe4fac16a0543fd9e2d, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.15
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Plant_01
+    category: 2
+    prefab: {fileID: 672855044907909645, guid: bb5fbf3b8c105b94dbb8533f3182f6e8, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Plant_02
+    category: 2
+    prefab: {fileID: 2992234790919736668, guid: a637bf6123939d0468dc28c614098d73, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Plant_03
+    category: 2
+    prefab: {fileID: 3631108247833677203, guid: 09517ea8e18819c4b921f9ded62ad9db, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Plant_04
+    category: 2
+    prefab: {fileID: 7177333527721392115, guid: 853c29facdc02dc408b4672473729f55, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Plant_05
+    category: 2
+    prefab: {fileID: 403733775771004936, guid: 4c47f58c5634d93468d668b54e0cf3d8, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Plant_06
+    category: 2
+    prefab: {fileID: 5692734239950922590, guid: 694128ea049760448951e29a1eeb5471, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Plant_07
+    category: 2
+    prefab: {fileID: 8076009054391141755, guid: bcd74c95a30e57846b27035f1d1f10ef, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Plant_08
+    category: 2
+    prefab: {fileID: 6482485888711500613, guid: 732eb95a25040a3409bfb3f3b32a5907, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Plants
+    category: 2
+    prefab: {fileID: 4651388792770637716, guid: bc7677b1148452948abf49b7711c89a6, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Reeds_01
+    category: 2
+    prefab: {fileID: 8889642711447738151, guid: 9c62eefaf2b00cd439ca0cc107144301, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Reeds_02
+    category: 2
+    prefab: {fileID: 1263697492726496934, guid: d0ba186e72690984794044cf9a82dd2e, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Reeds_03
+    category: 2
+    prefab: {fileID: 7039086837358753233, guid: 9ab57cdff9bf5e4448091afd63147e9d, type: 3}
+    weight: 1
+    minUniformScale: 0.75
+    maxUniformScale: 1.25
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: Rock_Big_01
+    category: 1
+    prefab: {fileID: 7763998473040964053, guid: 124ad46aec1102e47a4cdae502be89aa, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Rock_Big_02
+    category: 1
+    prefab: {fileID: 555382245844887498, guid: 1d985827dc2f0a94fbb84d96fdf353fa, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Rock_Big_03
+    category: 1
+    prefab: {fileID: 1964979563641626227, guid: fba6f107e60137045a4d8707859dd652, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Rock_Medium_01
+    category: 1
+    prefab: {fileID: 4814203077141888126, guid: 50d34b49112909b4d97e6a96610d51ab, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Rock_Medium_02
+    category: 1
+    prefab: {fileID: 6213618545703086181, guid: 32070042899093c4ebc66a7559bd607f, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Rock_Medium_03
+    category: 1
+    prefab: {fileID: 8369129194956114145, guid: d49f0f13e4d8b824bad03a66c7ed8e46, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Rock_Small_01
+    category: 1
+    prefab: {fileID: 3889046910303973218, guid: c57c6d86541c2ce4d945cda785dff148, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Rock_Small_02
+    category: 1
+    prefab: {fileID: 455221064620565400, guid: 1143e9a6e0fab4c4696b4e9e63a8d7b6, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Rock_Small_03
+    category: 1
+    prefab: {fileID: 709030090923673353, guid: 1fe834d4b513c8840a23d3f56793af7d, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Stone_Big_01
+    category: 1
+    prefab: {fileID: 4502823302244845586, guid: 78f4fda6b7fccb646bf8ac8de2537205, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Stone_Big_02
+    category: 1
+    prefab: {fileID: 5738077422291248339, guid: fda1d90552c23d54093acc5a44c8067a, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Stone_Big_03
+    category: 1
+    prefab: {fileID: 1055022842215460182, guid: 532217a856dbab64ab8d9bdb743876dc, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Stone_Medium_01
+    category: 1
+    prefab: {fileID: 5988590928601414446, guid: e39885b587dd8e2438efc0dcb990777a, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Stone_Medium_02
+    category: 1
+    prefab: {fileID: 5280039480901346520, guid: 47490ed8bcdce3f4382f5555146d49a5, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Stone_Medium_03
+    category: 1
+    prefab: {fileID: 7189711422697388807, guid: c189ce17a14e05443809b879e3fe6c30, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Stones_01
+    category: 1
+    prefab: {fileID: 7261055877933802793, guid: b8868e5d76be86a44a2e2a92a229cf7b, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Stones_02
+    category: 1
+    prefab: {fileID: 5051990900927181251, guid: 2bed5e45f49f1164694422d695a7cb87, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: Stones_03
+    category: 1
+    prefab: {fileID: 1094219722582570743, guid: fd48fa88773e85c4eb7a499bc2e4226b, type: 3}
+    weight: 1
+    minUniformScale: 0.8
+    maxUniformScale: 1.45
+    alignToNormal: 1
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_01_Blue
+    category: 0
+    prefab: {fileID: 6451577632815704034, guid: 107cac4590a2a764daf1cbcf0a7e7daf, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_01_Green
+    category: 0
+    prefab: {fileID: 827111804192909182, guid: 558b79c01c25d53428c6c3656b89375f, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_01_Pink
+    category: 0
+    prefab: {fileID: 7114042237501460276, guid: dab3bc037fb53eb4ea7c9b590b353133, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_01_Purple
+    category: 0
+    prefab: {fileID: 380462664188022103, guid: 49de10ac89cc1a646a98e5bac6756d30, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_01_Red
+    category: 0
+    prefab: {fileID: 5918471257419659846, guid: f5a27b2261923ad458aeaede85c57938, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_02_Blue
+    category: 0
+    prefab: {fileID: 5103411167644071604, guid: 224f3113283caa142ae6fbc87244e926, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_02_Green
+    category: 0
+    prefab: {fileID: 2404343395557683853, guid: cf4ab81a9ba01734fa5a7945c05d0c7d, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_02_Pink
+    category: 0
+    prefab: {fileID: 7384784294687962480, guid: b0695c356c279e845abdba6c9f5676b9, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_02_Purple
+    category: 0
+    prefab: {fileID: 5579702795116597133, guid: b991c5ba02fa6f248873030f2063cf3d, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_02_Red
+    category: 0
+    prefab: {fileID: 879308805340950535, guid: fcad540941cd95c45b11e878917c6b52, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_03_Blue
+    category: 0
+    prefab: {fileID: 6330712239258132328, guid: a48c0d1d9c522c642b477916fa0dfbec, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_03_Green
+    category: 0
+    prefab: {fileID: 1703526568568656569, guid: 70a546c36357c4149bc6f75207953673, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_03_Pink
+    category: 0
+    prefab: {fileID: 8547030302769966796, guid: cb79f2664cdec5c489bf1a12adbacc36, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_03_Purple
+    category: 0
+    prefab: {fileID: 8433721736357350314, guid: e6ad2a80893d15548b36e714dfe58447, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_03_Red
+    category: 0
+    prefab: {fileID: 9193541323145385431, guid: a3f0c91d12f1fd643adf945e86c9f01d, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_04_Blue
+    category: 0
+    prefab: {fileID: 6029751785393739471, guid: e2d8988947b88714f9943f13ba26381f, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_04_Green
+    category: 0
+    prefab: {fileID: 3639881908698059280, guid: 6ec2816b271f90945b1ac48dcb242f7d, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_04_Pink
+    category: 0
+    prefab: {fileID: 8577351088976648453, guid: 915687370875b924caf7f46ee9a31500, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_04_Purple
+    category: 0
+    prefab: {fileID: 5056862750051847511, guid: 57ad168f0f1250140a6dcfbbdea706ab, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_04_Red
+    category: 0
+    prefab: {fileID: 5669206426768240646, guid: f0bedca3d06434740a10651f21261347, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_05_Blue
+    category: 0
+    prefab: {fileID: 76460424842641495, guid: 357fbdb8cd9c6264688e6f54e3bc7874, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_05_Green
+    category: 0
+    prefab: {fileID: 2245323152668488297, guid: 9c5318dfdb18aab478b17a15b991ff20, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_05_Pink
+    category: 0
+    prefab: {fileID: 312579420878509047, guid: ce74ed55b452af54a8844b0ae8b24aa2, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_05_Purple
+    category: 0
+    prefab: {fileID: 116440449852533347, guid: 8c4cc3103abb4a648a0a400ea79ea752, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
+  - name: WillowTree_05_Red
+    category: 0
+    prefab: {fileID: 9102339867455539636, guid: eed9e9df9f832574585ca051fbbbf943, type: 3}
+    weight: 1
+    minUniformScale: 0.9
+    maxUniformScale: 1.2
+    alignToNormal: 0
+    randomYaw: 1
+    yOffset: 0
