@@ -15,16 +15,16 @@ MonoBehaviour:
   seedOffset: 8386
   minHeight01: 0.28
   maxHeight01: 0.95
-  maxSlopeDeg: 61.4
+  maxSlopeDeg: 27.9
   waterExclusionYOffset: 0.5
-  treesPerChunk: 100
+  treesPerChunk: 200
   rocksPerChunk: 50
-  plantsPerChunk: 200
-  grassPerChunk: 300
-  treeMinSpacing: 6
-  rockMinSpacing: 4
-  plantMinSpacing: 1.75
-  grassMinSpacing: 0.6
+  plantsPerChunk: 500
+  grassPerChunk: 1000
+  treeMinSpacing: 4
+  rockMinSpacing: 5
+  plantMinSpacing: 1
+  grassMinSpacing: 0.2
   attemptsPerSpawn: 10
   prefabs:
   - name: BlossomTree_01

@@ -35,6 +35,12 @@ namespace InfinityTerrain.Vegetation
 
         [Header("Prefab Entries")]
         public List<VegetationPrefabEntry> prefabs = new List<VegetationPrefabEntry>();
+
+        [Header("Clustering (Natural Forests)")]
+        [Tooltip("Scale of the noise for forest clumps. Smaller (e.g. 0.01) = larger forest zones.")]
+        public float clusterScale = 0.02f;
+        [Tooltip("Minimum noise value (0..1) to spawn vegetation. Higher = strictly inside clumps (denser but reduced area). Lower = spread out.")]
+        [Range(0f, 1f)] public float clusterThreshold = 0.3f;
     }
 }
 
