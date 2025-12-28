@@ -185,7 +185,7 @@ GameObject:
   - component: {fileID: 86797388}
   m_Layer: 0
   m_Name: Player
-  m_TagString: Untagged
+  m_TagString: Player
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
@@ -394,13 +394,13 @@ MonoBehaviour:
   erosionStrength: 0.2
   domainWarpStrength: 2
   waterLevel: 0.4
-  beachLevel: 0.45
-  grassLevel: 0.5
+  beachLevel: 0.42
+  grassLevel: 0.6
   rockLevel: 0.75
   snowLevel: 0.9
   enableWaterTiles: 1
-  waterMaterialOverride: {fileID: 2100000, guid: 8759ec410a6774b4ea13ae32dc2b8d2e, type: 2}
-  waterMaterialResourceName: Water_mat_02
+  waterMaterialOverride: {fileID: 2100000, guid: 1eed8c0c756ddc74a9c71c5d204fd2de, type: 2}
+  waterMaterialResourceName: Ocean
   waterRenderDistanceOverride: 0
   waterEnableLod: 1
   waterTileResolution: 33
@@ -414,7 +414,7 @@ MonoBehaviour:
   enableVegetationScatter: 1
   vegetationScatterSettings: {fileID: 11400000, guid: 54f823a81842f0345918e4386d77ecde, type: 2}
   vegetationRenderDistance: 2
-  vegetationOnlyMaxLod: 1
+  vegetationOnlyMaxLod: 0
   terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
   proceduralTerrainShader: {fileID: 4800000, guid: 3496a8c2308eae241a457749b5ec9a2a, type: 3}
 --- !u!4 &953848056

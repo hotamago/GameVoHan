@@ -321,6 +321,14 @@ namespace InfinityTerrain
             _lastVegetationRenderDistance = vegetationRenderDistance;
             _lastVegetationOnlyMaxLod = vegetationOnlyMaxLod;
 
+            if (vegetationScatterSettings == null)
+            {
+                Debug.LogWarning($"[InfinityRenderChunks] Vegetation Scatter is ENABLED but 'Vegetation Scatter Settings' is NULL. No vegetation will spawn. Please assign it in Inspector.");
+                // We do not return here; we let the manager be created with null settings, 
+                // and the manager/scatter scripts will handle it (by doing nothing), 
+                // but at least we warned the user.
+            }
+
             vegetationScatterManager = new VegetationScatterManager(
                 terrainSettings,
                 materialSettings,

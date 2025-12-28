@@ -15,12 +15,12 @@ MonoBehaviour:
   seedOffset: 8386
   minHeight01: 0.28
   maxHeight01: 0.95
-  maxSlopeDeg: 35
+  maxSlopeDeg: 61.4
   waterExclusionYOffset: 0.5
-  treesPerChunk: 18
-  rocksPerChunk: 10
-  plantsPerChunk: 30
-  grassPerChunk: 60
+  treesPerChunk: 100
+  rocksPerChunk: 50
+  plantsPerChunk: 200
+  grassPerChunk: 300
   treeMinSpacing: 6
   rockMinSpacing: 4
   plantMinSpacing: 1.75
