@@ -372,6 +372,7 @@ MonoBehaviour:
   spawnHeightOffset: 5
   enableSafety: 1
   safetyHeightOffset: 10
+  groundCheckDistance: 0.5
   hardVoidY: -500
   recoverBelowTerrain: 5
   resolution: 257
@@ -551,80 +552,6 @@ MonoBehaviour:
     m_VarianceClampScale: 0.9
     m_ContrastAdaptiveSharpening: 0
   m_Version: 2
---- !u!1 &1111056675
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1111056677}
-  - component: {fileID: 1111056676}
-  m_Layer: 0
-  m_Name: TerrainVegetation
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!114 &1111056676
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1111056675}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f9a6973e39e207146b4f4f8584ecdf4d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::TerrainVegetation
-  terrainSystem: {fileID: 953848055}
-  treePrefabs:
-  - {fileID: 8082689388017433024, guid: 181d619f05119f249bd1b8f9199cc4dc, type: 3}
-  - {fileID: 8082689388017433024, guid: bd00ad35c541eaa44874dde41f3bea90, type: 3}
-  - {fileID: 848743051794734949, guid: cae5a9fb73003f7469fc26e7af1144b5, type: 3}
-  - {fileID: 4511668860912491528, guid: 51483b6b6a6fda4449d0d8eb3a3cc668, type: 3}
-  tallGrassPrefabs:
-  - {fileID: 4003188186672061309, guid: 0708048d1a8567642a32d720914f4320, type: 3}
-  lowGrassPrefabs:
-  - {fileID: 7855908118402871436, guid: 142ebffa6672cc54a933010c945059ef, type: 3}
-  treesPerChunk: 50
-  tallGrassPerChunk: 200
-  lowGrassPerChunk: 400
-  minHeight: 0.5
-  maxHeight: 0.7
-  maxTreeHeight: 0.75
-  maxSlopeAngle: 45
-  minTreeSpacing: 5
-  minGrassSpacing: 1
-  vegetationSeed: 0
-  scaleRange: {x: 3, y: 20}
-  randomRotation: 1
-  maxTreeChunkDistance: 1
-  autoRemoveDistantTrees: 1
-  treeCleanupInterval: 60
-  spawnInBatches: 1
-  batchSize: 10
-  batchDelay: 0.01
-  showDebugGizmos: 0
-  enableDebugLogs: 1
---- !u!4 &1111056677
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1111056675}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 81.52556, y: 0, z: -553.3872}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2129749443
 GameObject:
   m_ObjectHideFlags: 0
@@ -759,5 +686,4 @@ SceneRoots:
   - {fileID: 2129749445}
   - {fileID: 86797383}
   - {fileID: 953848056}
-  - {fileID: 1111056677}
   - {fileID: 82092331}
