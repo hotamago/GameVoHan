@@ -19,8 +19,8 @@ MonoBehaviour:
   waterExclusionYOffset: 0.5
   treesPerChunk: 50
   rocksPerChunk: 10
-  plantsPerChunk: 30
-  grassPerChunk: 50
+  plantsPerChunk: 20
+  grassPerChunk: 100
   treeMinSpacing: 2
   rockMinSpacing: 5
   plantMinSpacing: 0.2
