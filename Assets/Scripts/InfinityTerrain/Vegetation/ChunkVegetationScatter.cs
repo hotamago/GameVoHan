@@ -77,14 +77,17 @@ namespace InfinityTerrain.Vegetation
             _lastSeed = 0;
         }
 
-        public void EnsureGenerated(long chunkX, long chunkY, int lodResolution, float chunkSize)
+        public bool EnsureGenerated(long chunkX, long chunkY, int lodResolution, float chunkSize, bool allowGeneration)
         {
-            if (settings == null) return;
-            if (heightMultiplier <= 0.0001f) return;
+            // Update every frame for DrawMeshInstanced
+            // Note: Update() is separate, but we check if we need to regenerate here.
+            
+            if (settings == null) return false;
+            if (heightMultiplier <= 0.0001f) return false;
 
             MeshCollider mc = GetComponent<MeshCollider>();
             MeshFilter mf = GetComponent<MeshFilter>();
-            if (mc == null || mf == null || mf.sharedMesh == null) return;
+            if (mc == null || mf == null || mf.sharedMesh == null) return false;
 
             int meshId = mf.sharedMesh.GetInstanceID();
             int seed = CombineSeed(globalSeed, settings.seedOffset, chunkX, chunkY);
@@ -96,7 +99,20 @@ namespace InfinityTerrain.Vegetation
                 _lastMeshInstanceId == meshId &&
                 _lastSeed == seed;
 
-            if (same) return;
+            if (same) return false; // Already up to date
+
+            // Needs update. Check allowance.
+            if (!allowGeneration)
+            {
+                // We need to generate but are not allowed this frame.
+                // Should we Clear() old data? Only if the chunk coords changed completely.
+                // If we moved to a new chunk coord, the old vegetation is invalid.
+                if (_lastChunkX != chunkX || _lastChunkY != chunkY)
+                {
+                    Clear(); // Clear incorrect vegetation while waiting
+                }
+                return false; 
+            }
 
             _lastChunkX = chunkX;
             _lastChunkY = chunkY;
@@ -105,6 +121,7 @@ namespace InfinityTerrain.Vegetation
             _lastSeed = seed;
 
             Regenerate(mc, chunkX, chunkY, seed, chunkSize);
+            return true;
         }
 
         // Called every frame to verify drawing
@@ -191,13 +208,23 @@ namespace InfinityTerrain.Vegetation
                 }
             }
 
+            // Calculate density-based scale factor
+            // Base settings are assumed to be for a 100x100 chunk
+            float areaScale = (chunkSize * chunkSize) / (100f * 100f);
+            if (areaScale < 0.01f) areaScale = 0.01f;
+
             // Spawn with collision for Trees and Rocks
-            SpawnCategoryInstanced(mc, seed ^ 0x1A2B3C4D, trees, settings.treesPerChunk, settings.treeMinSpacing, chunkSize, true);
-            SpawnCategoryInstanced(mc, seed ^ 0x22334455, rocks, settings.rocksPerChunk, settings.rockMinSpacing, chunkSize, true);
+            int treeCount = Mathf.RoundToInt(settings.treesPerChunk * areaScale);
+            int rockCount = Mathf.RoundToInt(settings.rocksPerChunk * areaScale);
+            int plantCount = Mathf.RoundToInt(settings.plantsPerChunk * areaScale);
+            int grassCount = Mathf.RoundToInt(settings.grassPerChunk * areaScale);
+
+            SpawnCategoryInstanced(mc, seed ^ 0x1A2B3C4D, trees, treeCount, settings.treeMinSpacing, chunkSize, true);
+            SpawnCategoryInstanced(mc, seed ^ 0x22334455, rocks, rockCount, settings.rockMinSpacing, chunkSize, true);
             
             // Visual only for Plants and Grass
-            SpawnCategoryInstanced(mc, seed ^ 0x66778899, plants, settings.plantsPerChunk, settings.plantMinSpacing, chunkSize, false);
-            SpawnCategoryInstanced(mc, seed ^ 0x13579BDF, grass, settings.grassPerChunk, settings.grassMinSpacing, chunkSize, false);
+            SpawnCategoryInstanced(mc, seed ^ 0x66778899, plants, plantCount, settings.plantMinSpacing, chunkSize, false);
+            SpawnCategoryInstanced(mc, seed ^ 0x13579BDF, grass, grassCount, settings.grassMinSpacing, chunkSize, false);
         }
 
         private void SpawnCategoryInstanced(

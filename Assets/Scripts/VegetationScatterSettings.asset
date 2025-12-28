@@ -17,15 +17,15 @@ MonoBehaviour:
   maxHeight01: 0.95
   maxSlopeDeg: 27.9
   waterExclusionYOffset: 0.5
-  treesPerChunk: 200
-  rocksPerChunk: 50
-  plantsPerChunk: 500
-  grassPerChunk: 1000
-  treeMinSpacing: 4
+  treesPerChunk: 50
+  rocksPerChunk: 10
+  plantsPerChunk: 30
+  grassPerChunk: 50
+  treeMinSpacing: 2
   rockMinSpacing: 5
-  plantMinSpacing: 1
-  grassMinSpacing: 0.2
-  attemptsPerSpawn: 10
+  plantMinSpacing: 0.2
+  grassMinSpacing: 0.1
+  attemptsPerSpawn: 5
   prefabs:
   - name: BlossomTree_01
     category: 0

@@ -68,7 +68,7 @@ namespace InfinityTerrain.Vegetation
                 scatter.globalSeed = _globalSeed;
                 scatter.heightMultiplier = Mathf.Max(0.0001f, heightMultiplier);
                 scatter.waterSurfaceY = waterSurfaceY;
-                scatter.EnsureGenerated(d.noiseChunkX, d.noiseChunkY, d.lodResolution, d.chunkSizeWorld);
+                scatter.EnsureGenerated(d.noiseChunkX, d.noiseChunkY, d.lodResolution, d.chunkSizeWorld, true);
             }
         }
     }
