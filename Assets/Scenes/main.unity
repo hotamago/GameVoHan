@@ -786,12 +786,12 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InfinityTerrain.InfinityRenderTerrainChunksBuiltIn
   player: {fileID: 540458266}
-  chunkSize: 100
+  chunkSize: 200
   renderDistance: 4
-  seed: 0
+  seed: 8386
   floatingOriginThreshold: 500
-  current_x: 0
-  current_y: 0
+  current_x: 3455345435
+  current_y: 94589271034
   autoPlacePlayerOnStart: 1
   spawnHeightOffset: 5
   enableSafety: 1
@@ -799,10 +799,10 @@ MonoBehaviour:
   groundCheckDistance: 0.5
   hardVoidY: -500
   recoverBelowTerrain: 5
-  resolution: 129
-  heightMultiplier: 30
+  resolution: 257
+  heightMultiplier: 500
   noiseScale: 0.005
-  octaves: 6
+  octaves: 4
   persistence: 0.5
   lacunarity: 2
   enableLod: 1
@@ -833,12 +833,14 @@ MonoBehaviour:
   terrainBasemapDistance: 1000
   terrainDrawInstanced: 1
   terrainGroupingID: 0
+  defaultTerrainLayer: {fileID: 8574412962073106934, guid: adb6478a7f24de14eb356d6dc3d0c502, type: 2}
+  defaultTerrainDiffuse: {fileID: 2800000, guid: 5972a508052895642916717940a75fd0, type: 3}
   enableTerrainTrees: 1
   vegetationScatterSettings: {fileID: 11400000, guid: 54f823a81842f0345918e4386d77ecde, type: 2}
   vegetationRenderDistance: 2
   vegetationOnlyMaxLod: 0
-  vegetationIncludeNonTreesAsTrees: 1
-  vegetationExcludeGrass: 1
+  vegetationIncludeNonTreesAsTrees: 0
+  vegetationExcludeGrass: 0
   terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
 --- !u!1 &971395975
 GameObject:

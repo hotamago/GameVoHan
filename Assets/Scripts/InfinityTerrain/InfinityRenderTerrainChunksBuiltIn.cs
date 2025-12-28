@@ -81,6 +81,10 @@ namespace InfinityTerrain
         [SerializeField] private float terrainBasemapDistance = 1000f;
         [SerializeField] private bool terrainDrawInstanced = true;
         [SerializeField] private int terrainGroupingID = 0;
+        [Tooltip("If null, a runtime TerrainLayer will be created (simple gray) so URP Terrain is not invisible.")]
+        [SerializeField] private TerrainLayer defaultTerrainLayer;
+        [Tooltip("Optional override for the default TerrainLayer diffuse texture.")]
+        [SerializeField] private Texture2D defaultTerrainDiffuse;
 
         [Header("Vegetation (Terrain Trees)")]
         [SerializeField] private bool enableTerrainTrees = true;
@@ -235,6 +239,9 @@ namespace InfinityTerrain
             _worldOriginManager = new WorldOriginManager(floatingOriginThreshold, chunkSize);
             _terrainGenerator = new TerrainGenerator(_terrainSettings, _materialSettings, materialManager: null);
 
+            EnsureDefaultTerrainLayer();
+            Material terrainMat = TryCreateTerrainMaterialTemplate();
+
             _terrainChunkManager = new TerrainChunkManagerBuiltIn(
                 _terrainSettings,
                 _terrainGenerator,
@@ -244,12 +251,38 @@ namespace InfinityTerrain
                 basemapDistance: terrainBasemapDistance,
                 drawInstanced: terrainDrawInstanced,
                 groupingID: terrainGroupingID,
-                terrainLayer: Mathf.Max(0, LayerMask.NameToLayer("Default")));
+                terrainLayer: Mathf.Max(0, LayerMask.NameToLayer("Default")),
+                defaultTerrainLayer: defaultTerrainLayer,
+                terrainMaterialTemplate: terrainMat);
 
             _waterManager = new WaterManager(_waterSettings, _terrainSettings, _materialSettings, _worldOriginManager, transform);
             _waterManager.EnsureWaterMaterialLoaded();
 
             _playerSafety = new PlayerSafety(_playerSettings, _terrainSettings, _materialSettings, player);
+        }
+
+        private void EnsureDefaultTerrainLayer()
+        {
+            if (defaultTerrainLayer != null) return;
+
+            // Create a simple runtime layer so URP terrain is visible even without authoring layers in editor.
+            // Note: TerrainLayer is NOT a ScriptableObject, use 'new' instead.
+            defaultTerrainLayer = new TerrainLayer();
+            defaultTerrainLayer.diffuseTexture = defaultTerrainDiffuse != null ? defaultTerrainDiffuse : Texture2D.grayTexture;
+            defaultTerrainLayer.tileSize = new Vector2(20f, 20f);
+            defaultTerrainLayer.tileOffset = Vector2.zero;
+        }
+
+        private static Material TryCreateTerrainMaterialTemplate()
+        {
+            // URP project: prefer URP Terrain/Lit.
+            Shader s =
+                Shader.Find("Universal Render Pipeline/Terrain/Lit") ??
+                Shader.Find("Universal Render Pipeline/Nature/Terrain/Lit") ??
+                Shader.Find("Nature/Terrain/Standard");
+
+            if (s == null) return null;
+            return new Material(s);
         }
 
         private float ComputeWaterSurfaceY()

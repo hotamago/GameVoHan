@@ -29,6 +29,8 @@ namespace InfinityTerrain.Core
         private readonly bool _drawInstanced;
         private readonly int _groupingID;
         private readonly int _terrainLayer;
+        private readonly TerrainLayer _defaultTerrainLayer;
+        private readonly Material _terrainMaterialTemplate;
 
         public TerrainChunkManagerBuiltIn(
             TerrainSettings terrainSettings,
@@ -39,7 +41,9 @@ namespace InfinityTerrain.Core
             float basemapDistance = 1000f,
             bool drawInstanced = true,
             int groupingID = 0,
-            int terrainLayer = 0)
+            int terrainLayer = 0,
+            TerrainLayer defaultTerrainLayer = null,
+            Material terrainMaterialTemplate = null)
         {
             _terrainSettings = terrainSettings;
             _terrainGenerator = terrainGenerator;
@@ -50,6 +54,8 @@ namespace InfinityTerrain.Core
             _drawInstanced = drawInstanced;
             _groupingID = groupingID;
             _terrainLayer = terrainLayer;
+            _defaultTerrainLayer = defaultTerrainLayer;
+            _terrainMaterialTemplate = terrainMaterialTemplate;
         }
 
         public void UpdateChunks(long centerChunkX, long centerChunkY)
@@ -232,6 +238,7 @@ namespace InfinityTerrain.Core
             TerrainData td = new TerrainData();
             td.heightmapResolution = d.lodResolution;
             td.size = new Vector3(d.chunkSizeWorld, Mathf.Max(0.0001f, _terrainSettings.heightMultiplier), d.chunkSizeWorld);
+            EnsureTerrainLayers(td);
 
             terrain.terrainData = td;
             tc.terrainData = td;
@@ -248,6 +255,21 @@ namespace InfinityTerrain.Core
             terrain.basemapDistance = _basemapDistance;
             terrain.groupingID = _groupingID;
             terrain.allowAutoConnect = false; // We are chunk streaming manually
+
+            // URP/HDRP: providing a custom material template avoids "invisible/transparent" terrain when created at runtime.
+            if (_terrainMaterialTemplate != null)
+            {
+                terrain.materialTemplate = _terrainMaterialTemplate;
+            }
+        }
+
+        private void EnsureTerrainLayers(TerrainData td)
+        {
+            if (td == null) return;
+            // URP terrain requires TerrainLayers to render properly; runtime TerrainData has none by default.
+            if (td.terrainLayers != null && td.terrainLayers.Length > 0) return;
+            if (_defaultTerrainLayer == null) return;
+            td.terrainLayers = new[] { _defaultTerrainLayer };
         }
 
         private void RegenerateChunk(ChunkData data, DesiredChunk d)
@@ -268,6 +290,7 @@ namespace InfinityTerrain.Core
                 td.heightmapResolution = d.lodResolution;
             }
             td.size = new Vector3(d.chunkSizeWorld, Mathf.Max(0.0001f, _terrainSettings.heightMultiplier), d.chunkSizeWorld);
+            EnsureTerrainLayers(td);
 
             // Generate heights (0..1)
             float[,] heights01 = _terrainGenerator.GenerateHeightmap01GPU(
