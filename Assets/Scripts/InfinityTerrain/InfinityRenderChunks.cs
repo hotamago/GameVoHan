@@ -303,6 +303,12 @@ namespace InfinityTerrain
                 return;
             }
 
+            // Ensure settings are initialized (may not be if called before Start)
+            if (terrainSettings == null || materialSettings == null)
+            {
+                return;
+            }
+
             bool changed =
                 vegetationScatterManager == null ||
                 _lastVegetationSettings != vegetationScatterSettings ||
@@ -361,6 +367,12 @@ namespace InfinityTerrain
         {
             if (!enabled || player == null) return;
 
+            // Ensure managers are initialized
+            if (worldOriginManager == null || chunkManager == null || waterManager == null)
+            {
+                return; // Wait for Start() to initialize managers
+            }
+
             // 1. World Shift Check
             if (worldOriginManager.TryShiftWorldOrigin(player, chunkManager.LoadedChunks, waterManager.GetLoadedWaterTiles()))
             {
@@ -396,7 +408,7 @@ namespace InfinityTerrain
             }
 
             // 5. Player Safety
-            if (enableSafety)
+            if (enableSafety && playerSafety != null)
             {
                 playerSafety.UpdatePlayerSafety(pX, pZ, inChunkX, inChunkZ);
             }
@@ -421,6 +433,12 @@ namespace InfinityTerrain
         public void TeleportToChunk(long targetChunkX, long targetChunkY)
         {
             if (!enabled || player == null) return;
+
+            // Ensure managers are initialized (may not be if called from OnValidate before Start)
+            if (chunkManager == null || waterManager == null || worldOriginManager == null)
+            {
+                return; // Will be called again after Start() initializes managers
+            }
 
             // Reset terrain around new location
             chunkManager.ClearAllChunks();
