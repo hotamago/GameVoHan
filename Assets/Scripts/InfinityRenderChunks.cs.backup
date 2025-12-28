@@ -1,0 +1,1633 @@
+using UnityEngine;
+using UnityEngine.Rendering;
+using System.Collections.Generic;
+using System;
+using System.Collections;
+
+public class InfinityRenderChunks : MonoBehaviour
+{
+    [Header("General Settings")]
+    [SerializeField] private Transform player;
+    [SerializeField] private int chunkSize = 100;
+    [SerializeField] private int renderDistance = 4;
+    [SerializeField] private int seed = 0;
+    [SerializeField] private float floatingOriginThreshold = 500f;
+
+    [Header("Current Position")]
+    [Tooltip("Realtime absolute chunk coordinate (64-bit). You can also edit these in Inspector during Play Mode to teleport.")]
+    public long current_x;
+    public long current_y;
+    
+    [Header("Debug Info")]
+    [SerializeField] private Vector3 _debugLocalPos;
+
+    [Header("Player Spawn")]
+    [SerializeField] private bool autoPlacePlayerOnStart = true;
+    [Tooltip("When the game starts, player.y will be set to (terrainHeight + spawnHeightOffset) at the current (x,z).")]
+    public float spawnHeightOffset = 5.0f;
+
+    [Header("Player Safety")]
+    [SerializeField] private bool enableSafety = true;
+    [SerializeField] private float safetyHeightOffset = 2.0f;
+    [SerializeField] private float groundCheckDistance = 0.5f;
+    [Tooltip("If player falls below this Y (local Unity space), force-teleport back above terrain even if 'jumping'.")]
+    [SerializeField] private float hardVoidY = -500f;
+    [Tooltip("Teleport player back when they are below (terrainHeight - this value), unless they are actively jumping up.")]
+    [SerializeField] private float recoverBelowTerrain = 5.0f;
+
+    [Header("Terrain Settings")]
+    [Tooltip("Base (highest) resolution. For LOD to work correctly this MUST be 2^n+1 (e.g. 129, 257, 513).")]
+    [SerializeField] private int resolution = 129; // Base (highest) resolution. LOD uses this as the sampling grid.
+    [SerializeField] private float heightMultiplier = 30f;
+    [SerializeField] private float noiseScale = 0.005f;
+    [SerializeField] private int octaves = 6;
+    [SerializeField] private float persistence = 0.5f;
+    [SerializeField] private float lacunarity = 2f;
+
+    [Header("Terrain LOD")]
+    [Tooltip("Enable chunk LOD: far chunks use lower mesh/heightmap resolution to reduce cost.")]
+    [SerializeField] private bool enableLod = true;
+    [Tooltip("Chunk distance (Chebyshev: max(|dx|,|dy|)) thresholds per LOD level. Must match 'lodResolutions' length.")]
+    [SerializeField] private int[] lodChunkRadii = new int[] { 1, 2, 4, 999 };
+    [Tooltip("Mesh/heightmap resolution per LOD level (must be 2^n+1 and (resolution-1) must be divisible by (lodRes-1)). Example: 129,65,33,17,9.")]
+    [SerializeField] private int[] lodResolutions = new int[] { 129, 65, 33, 17 };
+    [Tooltip("Optional: add a downward skirt on chunk borders to hide tiny cracks from LOD T-junctions. 0 disables.")]
+    [SerializeField] private float skirtDepth = 0f;
+
+    [Header("Far SuperChunks (×3)")]
+    [Tooltip("Experimental: replace far-away base chunks with larger 'superchunks' to reduce chunk count.")]
+    [SerializeField] private bool enableFarSuperChunks = false;
+    [Tooltip("Superchunk covers (scale x scale) base chunks. Default 3.")]
+    [SerializeField] private int superChunkScale = 3;
+    [Tooltip("Chebyshev radius (in base chunks). Beyond this, superchunks are used when possible.")]
+    [SerializeField] private int superChunkStartRadius = 4;
+    [Tooltip("Superchunks usually should NOT have colliders (performance).")]
+    [SerializeField] private bool superChunksHaveCollider = false;
+    
+    [Header("Advanced Terrain")]
+    [SerializeField] private float mountainStrength = 0.4f;
+    [SerializeField] private float plainStrength = 0.3f;
+    [SerializeField] private float erosionStrength = 0.2f;
+    [SerializeField] private float domainWarpStrength = 2.0f;
+    
+    [Header("Shader Height Thresholds")]
+    [SerializeField] private float waterLevel = 0.2f;
+    [SerializeField] private float beachLevel = 0.25f;
+    [SerializeField] private float grassLevel = 0.55f;
+    [SerializeField] private float rockLevel = 0.75f;
+    [SerializeField] private float snowLevel = 0.9f;
+
+    [Header("Water (IgniteCoders Simple Water Shader)")]
+    [SerializeField] private bool enableWaterTiles = true;
+    [Tooltip("If assigned, this material is used instead of loading from Resources.")]
+    [SerializeField] private Material waterMaterialOverride;
+    [Tooltip("Resources material name. Default exists at Assets/IgniteCoders/Simple Water Shader/Resources/Water_mat_01.mat")]
+    [SerializeField] private string waterMaterialResourceName = "Water_mat_01";
+    [Tooltip("How far water tiles should be created around the player (in chunks). If 0, uses Terrain renderDistance.")]
+    [SerializeField] private int waterRenderDistanceOverride = 0;
+
+    [Header("Water LOD / Resolution")]
+    [Tooltip("Enable water tile LOD: far tiles use lower vertex resolution (flat mesh, cheaper).")]
+    [SerializeField] private bool waterEnableLod = true;
+    [Tooltip("If LOD disabled, this is the single water mesh resolution (verts per side).")]
+    [SerializeField] private int waterTileResolution = 33;
+    [Tooltip("Chunk distance (Chebyshev) thresholds per water LOD level. Must match 'waterLodResolutions' length.")]
+    [SerializeField] private int[] waterLodChunkRadii = new int[] { 1, 2, 4, 999 };
+    [Tooltip("Water mesh resolution per LOD level (verts per side). Suggested: 65,33,17,9,5.")]
+    [SerializeField] private int[] waterLodResolutions = new int[] { 33, 17, 9, 5 };
+
+    [Tooltip("Water surface height in world-space meters. If 'Use Terrain Water Level' is enabled, this is ignored.")]
+    [SerializeField] private float waterSurfaceY = 0f;
+    [Tooltip("If enabled, the water surface Y is computed as (waterLevel * heightMultiplier).")]
+    [SerializeField] private bool waterUseTerrainWaterLevel = true;
+    [SerializeField] private bool waterCastShadows = false;
+    [SerializeField] private bool waterReceiveShadows = true;
+    [Tooltip("Optional: raise the water a bit to avoid Z-fighting at shoreline.")]
+    [SerializeField] private float waterSurfaceYOffset = 0.02f;
+    
+    [Header("GPU Resources")]
+    [Tooltip("REQUIRED: Assign TerrainGen.compute from Assets/Resources/Shaders/ folder directly in Inspector. This ensures it's included in builds.")]
+    [SerializeField] private ComputeShader terrainComputeShader;
+    [SerializeField] private Shader proceduralTerrainShader;
+
+    // State
+    // We use string keys "X_Y" for long coordinates support
+    private Dictionary<string, ChunkData> loadedChunks = new Dictionary<string, ChunkData>();
+    private Material terrainMaterial;
+
+    // Water runtime (managed similar to chunks)
+    private readonly Dictionary<string, GameObject> _loadedWaterTiles = new Dictionary<string, GameObject>(256);
+    private readonly Dictionary<string, int> _loadedWaterTileRes = new Dictionary<string, int>(256);
+    private readonly Dictionary<long, Mesh> _waterMeshCache = new Dictionary<long, Mesh>(16);
+    private Material _waterMaterialLoaded;
+
+    // Native "long + float" world tracking:
+    // - worldChunkOriginX/Y: absolute chunk coordinate for local chunk 0_0.
+    // - Unity Transforms stay small (float) to avoid farland.
+    // - Absolute world location is expressed as (worldChunkOrigin + localChunk) in long.
+    private long worldChunkOriginX = 0;
+    private long worldChunkOriginY = 0;
+
+    private class ChunkData
+    {
+        public GameObject gameObject;
+        public bool isReady;
+        public int lodResolution;
+        public bool isSuperChunk;
+        public int superScale;
+        public long noiseChunkX;
+        public long noiseChunkY;
+        public int baseVertsPerChunk;
+        public float chunkSizeWorld;
+    }
+
+    private long _runtimeChunkX;
+    private long _runtimeChunkY;
+
+    // Coroutine references for cleanup
+    private Coroutine _placePlayerCoroutine;
+
+    private static void SetLongAsUInt2(ComputeShader cs, string loName, string hiName, long value)
+    {
+        // Preserve two's complement bit pattern so negative coords stay deterministic.
+        ulong u = unchecked((ulong)value);
+        uint lo = (uint)u;
+        uint hi = (uint)(u >> 32);
+        cs.SetInt(loName, unchecked((int)lo));
+        cs.SetInt(hiName, unchecked((int)hi));
+    }
+
+    private int ComputeNoiseShift(float scale)
+    {
+        // Convert the old "world space scale" into a stable, power-of-two cell size in vertex-grid units.
+        // cellSizeWorld ≈ 1/scale
+        // stepWorld = chunkSize / (resolution-1)
+        // cellSizeVerts ≈ cellSizeWorld / stepWorld
+        if (scale <= 0f) return 8;
+
+        float stepWorld = chunkSize / (float)(resolution - 1);
+        float cellSizeVerts = (1f / scale) / stepWorld;
+        if (cellSizeVerts <= 1f) return 0;
+
+        int shift = Mathf.RoundToInt(Mathf.Log(cellSizeVerts, 2f));
+        // Shader assumes [0..30] (uses 1u<<shift)
+        return Mathf.Clamp(shift, 0, 30);
+    }
+
+    private void Start()
+    {
+        if (!enabled) return;
+        if (player == null)
+        {
+             GameObject p = GameObject.FindGameObjectWithTag("Player");
+             if (p != null) player = p.transform;
+        }
+
+        if (seed == 0) seed = UnityEngine.Random.Range(-10000, 10000);
+        
+        InitializeMaterials();
+
+        // Verify compute shader is assigned (required for terrain generation)
+        if (terrainComputeShader == null)
+        {
+            Debug.LogError("Terrain Compute Shader is not assigned! " +
+                "Please assign 'TerrainGen.compute' from Assets/Resources/Shaders/ in the Inspector. " +
+                "Terrain generation will not work without this.");
+            enabled = false;
+            return;
+        }
+        
+        // Verify compute shader has required kernels
+        int kernelHeight = terrainComputeShader.FindKernel("GenerateHeightmap");
+        if (kernelHeight < 0)
+        {
+            Debug.LogError("TerrainGen compute shader is missing required kernel 'GenerateHeightmap'! " +
+                "The shader may not have compiled correctly for the target platform.");
+            enabled = false;
+            return;
+        }
+        
+        // Allow setting a starting chunk from Inspector (current_x/current_y).
+        // During gameplay these are still realtime values.
+        TeleportToChunk(current_x, current_y);
+
+        // Optional water tiles (per chunk, managed like terrain chunks)
+        EnsureWaterMaterialLoaded();
+        UpdateWaterTilesImmediate();
+
+        if (autoPlacePlayerOnStart)
+        {
+            // Delay 1+ frames so other Start()s / spawning can finish, and so terrain generation kicks off.
+            _placePlayerCoroutine = StartCoroutine(PlacePlayerAboveTerrainWhenPlayerReady());
+        }
+    }
+
+    private IEnumerator PlacePlayerAboveTerrainWhenPlayerReady()
+    {
+        // Try for a short time in case the player is spawned after this component starts.
+        const int tries = 60;
+        for (int i = 0; i < tries; i++)
+        {
+            // Check if script is still enabled
+            if (!enabled) yield break;
+
+            if (player == null)
+            {
+                GameObject p = GameObject.FindGameObjectWithTag("Player");
+                if (p != null) player = p.transform;
+            }
+
+            if (player != null)
+            {
+                PlacePlayerAboveTerrainAtCurrentXZ(spawnHeightOffset);
+                yield break;
+            }
+
+            yield return null;
+        }
+    }
+
+    private bool TryGetTerrainHeightRaycast(Vector3 positionXZ, out float terrainY)
+    {
+        // Raycast can easily hit the player's own collider if we cast from above at the same XZ.
+        // So we raycast ALL and choose the closest hit that is NOT part of the player hierarchy.
+        float startHeight = Mathf.Max(positionXZ.y + 500f, 1000f);
+        Vector3 start = new Vector3(positionXZ.x, startHeight, positionXZ.z);
+
+        // Big distance so it still works if player fell far below.
+        RaycastHit[] hits = Physics.RaycastAll(start, Vector3.down, 200000f, ~0, QueryTriggerInteraction.Ignore);
+        if (hits == null || hits.Length == 0)
+        {
+            terrainY = 0f;
+            return false;
+        }
+
+        Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+        Transform playerRoot = player != null ? player : null;
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider c = hits[i].collider;
+            if (c == null) continue;
+
+            // Ignore player's own colliders (including children)
+            if (playerRoot != null && c.transform.IsChildOf(playerRoot)) continue;
+
+            terrainY = hits[i].point.y;
+            return true;
+        }
+
+        terrainY = 0f;
+        return false;
+    }
+
+    private void PlacePlayerAboveTerrainAtCurrentXZ(float heightOffset)
+    {
+        if (player == null) return;
+
+        // Compute player's current chunk and in-chunk coordinates (same logic as Update)
+        int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
+        int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
+        long pX = worldChunkOriginX + localChunkX;
+        long pZ = worldChunkOriginY + localChunkY;
+
+        float inChunkX = player.position.x - (localChunkX * chunkSize);
+        float inChunkZ = player.position.z - (localChunkY * chunkSize);
+
+        // Prefer raycast (actual collider), fallback to CPU approximation if terrain isn't ready yet.
+        float terrainY;
+        if (!TryGetTerrainHeightRaycast(player.position, out terrainY))
+        {
+            terrainY = GetTerrainHeightCPU(pX, pZ, inChunkX, inChunkZ);
+        }
+
+        Vector3 newPos = player.position;
+        newPos.y = terrainY + Mathf.Max(0f, heightOffset);
+        player.position = newPos;
+
+        Rigidbody rb = player.GetComponent<Rigidbody>();
+        if (rb != null) rb.linearVelocity = Vector3.zero;
+    }
+
+    private void OnValidate()
+    {
+        // Let the user edit current_x/current_y in Inspector while playing to teleport instantly.
+        if (!Application.isPlaying) return;
+        if (!enabled) return; // Don't run if script is disabled
+        if (player == null) return;
+
+        if (current_x != _runtimeChunkX || current_y != _runtimeChunkY)
+        {
+            TeleportToChunk(current_x, current_y);
+        }
+    }
+
+    private void RebuildLodArraysToMatchBase()
+    {
+        // Use ChunkLodUtility to build LOD resolutions and resize radii
+        lodResolutions = ChunkLodUtility.BuildPow2Plus1LodResolutions(resolution, 9);
+        lodChunkRadii = ChunkLodUtility.ResizeRadiiToMatchLevels(lodChunkRadii, lodResolutions.Length);
+    }
+
+    // ---- Editor / validation helpers (used by a CustomEditor) ----
+    public bool IsLodConfigValid(out string error)
+    {
+        if (!enableLod)
+        {
+            error = null;
+            return true;
+        }
+
+        if (resolution < 9)
+        {
+            error = "resolution must be >= 9.";
+            return false;
+        }
+
+        int baseVerts = resolution - 1;
+        if (!ChunkLodUtility.IsPow2(baseVerts))
+        {
+            error = $"Base resolution invalid for LOD: resolution-1 must be power-of-two. Current resolution={resolution} => baseVerts={baseVerts}. Use 2^n+1 (e.g. 129, 257, 513).";
+            return false;
+        }
+
+        if (lodResolutions == null || lodResolutions.Length == 0)
+        {
+            error = "lodResolutions is empty.";
+            return false;
+        }
+
+        if (lodChunkRadii == null || lodChunkRadii.Length == 0)
+        {
+            error = "lodChunkRadii is empty.";
+            return false;
+        }
+
+        int levels = Mathf.Min(lodChunkRadii.Length, lodResolutions.Length);
+        if (levels < 1)
+        {
+            error = "LOD arrays must have at least 1 level.";
+            return false;
+        }
+
+        for (int i = 0; i < levels; i++)
+        {
+            int r = lodResolutions[i];
+            if (r < 9 || r > resolution)
+            {
+                error = $"lodResolutions[{i}]={r} must be in [9..resolution].";
+                return false;
+            }
+            if ((r & 1) == 0)
+            {
+                error = $"lodResolutions[{i}]={r} must be odd (2^n+1).";
+                return false;
+            }
+            int v = r - 1;
+            if (!ChunkLodUtility.IsPow2(v))
+            {
+                error = $"lodResolutions[{i}]={r} invalid: (lodRes-1) must be power-of-two.";
+                return false;
+            }
+            if (baseVerts % v != 0)
+            {
+                error = $"lodResolutions[{i}]={r} invalid: (resolution-1)={baseVerts} must be divisible by (lodRes-1)={v}.";
+                return false;
+            }
+        }
+
+        error = null;
+        return true;
+    }
+
+    public void FixLodConfig(bool snapUp)
+    {
+        resolution = ChunkLodUtility.SnapToPow2Plus1(resolution, snapUp, 9, 2049);
+        RebuildLodArraysToMatchBase();
+    }
+
+    // ---- Water LOD validation helpers (used by CustomEditor) ----
+    public bool IsWaterLodConfigValid(out string error)
+    {
+        if (!enableWaterTiles)
+        {
+            error = null;
+            return true;
+        }
+
+        // Validate base resolution when LOD is disabled
+        if (!waterEnableLod)
+        {
+            if (waterTileResolution < 2)
+            {
+                error = $"waterTileResolution must be >= 2. Current: {waterTileResolution}.";
+                return false;
+            }
+            error = null;
+            return true;
+        }
+
+        // Validate LOD arrays
+        if (waterLodResolutions == null || waterLodResolutions.Length == 0)
+        {
+            error = "waterLodResolutions is empty when waterEnableLod is true.";
+            return false;
+        }
+
+        if (waterLodChunkRadii == null || waterLodChunkRadii.Length == 0)
+        {
+            error = "waterLodChunkRadii is empty when waterEnableLod is true.";
+            return false;
+        }
+
+        int levels = Mathf.Min(waterLodChunkRadii.Length, waterLodResolutions.Length);
+        if (levels < 1)
+        {
+            error = "Water LOD arrays must have at least 1 level.";
+            return false;
+        }
+
+        // Check array length mismatch
+        if (waterLodChunkRadii.Length != waterLodResolutions.Length)
+        {
+            error = $"waterLodChunkRadii.Length ({waterLodChunkRadii.Length}) != waterLodResolutions.Length ({waterLodResolutions.Length}). They must match.";
+            return false;
+        }
+
+        // Validate each resolution value
+        for (int i = 0; i < levels; i++)
+        {
+            int r = waterLodResolutions[i];
+            if (r < 2)
+            {
+                error = $"waterLodResolutions[{i}]={r} must be >= 2.";
+                return false;
+            }
+            // Note: Water doesn't require odd, but ValidateWaterTileResolution makes it odd for symmetry
+        }
+
+        // Validate radii are ascending (optional but helpful)
+        for (int i = 1; i < waterLodChunkRadii.Length; i++)
+        {
+            if (waterLodChunkRadii[i] < waterLodChunkRadii[i - 1])
+            {
+                error = $"waterLodChunkRadii should be ascending. Found {waterLodChunkRadii[i - 1]} >= {waterLodChunkRadii[i]} at index {i}.";
+                return false;
+            }
+        }
+
+        error = null;
+        return true;
+    }
+
+    public void FixWaterLodConfig()
+    {
+        if (!enableWaterTiles || !waterEnableLod) return;
+
+        // Ensure resolutions are valid (odd, clamped)
+        if (waterLodResolutions != null && waterLodResolutions.Length > 0)
+        {
+            for (int i = 0; i < waterLodResolutions.Length; i++)
+            {
+                waterLodResolutions[i] = ValidateWaterTileResolution(waterLodResolutions[i]);
+            }
+        }
+
+        // Ensure base resolution is valid if LOD disabled
+        if (!waterEnableLod)
+        {
+            waterTileResolution = ValidateWaterTileResolution(waterTileResolution);
+        }
+
+        // Resize radii to match resolutions length
+        if (waterLodResolutions != null && waterLodChunkRadii != null)
+        {
+            if (waterLodChunkRadii.Length != waterLodResolutions.Length)
+            {
+                int[] newR = new int[waterLodResolutions.Length];
+                for (int i = 0; i < newR.Length; i++)
+                {
+                    newR[i] = (i < waterLodChunkRadii.Length) ? waterLodChunkRadii[i] : (i == newR.Length - 1 ? 999 : (i + 1));
+                }
+                waterLodChunkRadii = newR;
+            }
+        }
+    }
+
+    private static int ClampLongToInt(long v)
+    {
+        if (v > int.MaxValue) return int.MaxValue;
+        if (v < int.MinValue) return int.MinValue;
+        return (int)v;
+    }
+
+    private static long FloorDiv(long a, int b)
+    {
+        // b must be > 0
+        if (b <= 0) return 0;
+        if (a >= 0) return a / b;
+        return -(((-a) + b - 1) / b);
+    }
+
+    private static long ClampLong(long v, long min, long max)
+    {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
+
+    private struct DesiredChunk
+    {
+        public string key;
+        public bool isSuper;
+        public int superScale;
+        public long noiseChunkX;
+        public long noiseChunkY;
+        public long minBaseChunkX;
+        public long minBaseChunkY;
+        public int lodResolution;
+        public float chunkSizeWorld;
+        public int baseVertsPerChunk;
+        public bool wantCollider;
+    }
+
+    private int GetLodResolutionForChunkDelta(int dx, int dy)
+    {
+        return ChunkLodUtility.GetPow2Plus1LodResolutionForChunkDelta(
+            dx, dy, enableLod, resolution, lodChunkRadii, lodResolutions, 9);
+    }
+    
+    private void InitializeMaterials()
+    {
+        // Terrain Fallback Logic
+        if (proceduralTerrainShader == null) proceduralTerrainShader = Shader.Find("Custom/ProceduralTerrain");
+        
+        // If still null or not supported, fallback to Standard
+        bool useFallback = (proceduralTerrainShader == null);
+        if (!useFallback && !proceduralTerrainShader.isSupported) useFallback = true;
+        
+        if (useFallback)
+        {
+            Debug.LogWarning("Custom Shader missing or not supported. Falling back to Standard.");
+            proceduralTerrainShader = Shader.Find("Standard");
+        }
+        
+        terrainMaterial = new Material(proceduralTerrainShader);
+        if (useFallback) terrainMaterial.color = new Color(0.4f, 0.6f, 0.4f); // Green
+        
+        // Set shader properties
+        UpdateMaterialProperties();
+    }
+    
+    private void UpdateMaterialProperties()
+    {
+        if (terrainMaterial == null) return;
+        
+        // Set height multiplier
+        terrainMaterial.SetFloat("_HeightMultiplier", heightMultiplier);
+        
+        // Set height thresholds
+        terrainMaterial.SetFloat("_WaterLevel", waterLevel);
+        terrainMaterial.SetFloat("_BeachLevel", beachLevel);
+        terrainMaterial.SetFloat("_GrassLevel", grassLevel);
+        terrainMaterial.SetFloat("_RockLevel", rockLevel);
+        terrainMaterial.SetFloat("_SnowLevel", snowLevel);
+    }
+
+    private void Update()
+    {
+        if (!enabled || player == null) return;
+
+        // 1. World Shift Check
+        if (Mathf.Abs(player.position.x) > floatingOriginThreshold || Mathf.Abs(player.position.z) > floatingOriginThreshold)
+        {
+            ShiftWorldOrigin();
+        }
+
+        // 2. Calculate Absolute Chunk Coordinate (native long + float local)
+        int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
+        int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
+        long pX = worldChunkOriginX + localChunkX;
+        long pZ = worldChunkOriginY + localChunkY;
+
+        float inChunkX = player.position.x - (localChunkX * chunkSize);
+        float inChunkZ = player.position.z - (localChunkY * chunkSize);
+        
+        // Realtime current chunk (always)
+        _runtimeChunkX = pX;
+        _runtimeChunkY = pZ;
+        current_x = pX;
+        current_y = pZ;
+        _debugLocalPos = player.position;
+
+        // 3. Update Chunks if changed
+        UpdateChunks(pX, pZ);
+
+        // 3.5 Update water tiles (create/unload like chunks)
+        UpdateWaterTiles(pX, pZ);
+        
+        // 4. Safety
+        if (enableSafety) UpdatePlayerSafety(pX, pZ, inChunkX, inChunkZ);
+    }
+    
+    private void ShiftWorldOrigin()
+    {
+        if (!enabled) return; // Don't shift origin if script is disabled
+        
+        // Shift by whole chunks so origin stays chunk-aligned (no doubles needed).
+        int dxChunks = Mathf.FloorToInt(player.position.x / chunkSize);
+        int dzChunks = Mathf.FloorToInt(player.position.z / chunkSize);
+        if (dxChunks == 0 && dzChunks == 0) return;
+
+        Vector3 shift = new Vector3(dxChunks * chunkSize, 0, dzChunks * chunkSize);
+        
+        // Shift Player
+        player.position -= shift;
+        
+        // Shift Chunks
+        foreach (var kvp in loadedChunks)
+        {
+            if (kvp.Value.gameObject != null)
+                kvp.Value.gameObject.transform.position -= shift;
+        }
+
+        // Shift Water Tiles (if any) so they stay aligned with the local world too.
+        foreach (var kvp in _loadedWaterTiles)
+        {
+            if (kvp.Value != null)
+                kvp.Value.transform.position -= shift;
+        }
+
+        // Update absolute chunk origin (native long)
+        worldChunkOriginX += dxChunks;
+        worldChunkOriginY += dzChunks;
+    }
+
+    private void UpdateChunks(long centerChunkX, long centerChunkY)
+    {
+        if (!enabled) return; // Don't update chunks if script is disabled
+        
+        // Build desired chunks (base + optional superchunks)
+        Dictionary<string, DesiredChunk> desired = new Dictionary<string, DesiredChunk>(256);
+
+        int scale = Mathf.Max(2, superChunkScale);
+        int baseVertsBase = Mathf.Max(1, resolution - 1);
+
+        long nearMinX = centerChunkX - superChunkStartRadius;
+        long nearMaxX = centerChunkX + superChunkStartRadius;
+        long nearMinY = centerChunkY - superChunkStartRadius;
+        long nearMaxY = centerChunkY + superChunkStartRadius;
+
+        for (int dx = -renderDistance; dx <= renderDistance; dx++)
+        {
+            for (int dy = -renderDistance; dy <= renderDistance; dy++)
+            {
+                long cx = centerChunkX + dx;
+                long cy = centerChunkY + dy;
+                int r = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy));
+
+                bool trySuper = enableFarSuperChunks && r > superChunkStartRadius;
+                if (trySuper)
+                {
+                    long sx = FloorDiv(cx, scale);
+                    long sy = FloorDiv(cy, scale);
+                    long minBaseX = sx * scale;
+                    long minBaseY = sy * scale;
+                    long maxBaseX = minBaseX + (scale - 1);
+                    long maxBaseY = minBaseY + (scale - 1);
+
+                    // If this superchunk touches the near square, fall back to base chunks to avoid overlap/hard seams.
+                    bool intersectsNear =
+                        !(maxBaseX < nearMinX || minBaseX > nearMaxX || maxBaseY < nearMinY || minBaseY > nearMaxY);
+
+                    if (!intersectsNear)
+                    {
+                        string skey = $"S_{scale}_{sx}_{sy}";
+                        if (!desired.ContainsKey(skey))
+                        {
+                            // Approx distance for LOD selection: use superchunk center in base-chunk units.
+                            long centerX = minBaseX + (scale / 2);
+                            long centerY2 = minBaseY + (scale / 2);
+                            int sdx = ClampLongToInt(centerX - centerChunkX);
+                            int sdy = ClampLongToInt(centerY2 - centerChunkY);
+
+                            int lodRes = GetLodResolutionForChunkDelta(sdx, sdy);
+                            DesiredChunk d = new DesiredChunk
+                            {
+                                key = skey,
+                                isSuper = true,
+                                superScale = scale,
+                                noiseChunkX = sx,
+                                noiseChunkY = sy,
+                                minBaseChunkX = minBaseX,
+                                minBaseChunkY = minBaseY,
+                                lodResolution = lodRes,
+                                chunkSizeWorld = chunkSize * scale,
+                                baseVertsPerChunk = baseVertsBase * scale,
+                                wantCollider = superChunksHaveCollider
+                            };
+                            desired[skey] = d;
+                        }
+
+                        continue;
+                    }
+                }
+
+                // Base chunk
+                string key = $"{cx}_{cy}";
+                if (!desired.ContainsKey(key))
+                {
+                    int lodRes = GetLodResolutionForChunkDelta(dx, dy);
+                    DesiredChunk d = new DesiredChunk
+                    {
+                        key = key,
+                        isSuper = false,
+                        superScale = 1,
+                        noiseChunkX = cx,
+                        noiseChunkY = cy,
+                        minBaseChunkX = cx,
+                        minBaseChunkY = cy,
+                        lodResolution = lodRes,
+                        chunkSizeWorld = chunkSize,
+                        baseVertsPerChunk = baseVertsBase,
+                        wantCollider = true
+                    };
+                    desired[key] = d;
+                }
+            }
+        }
+
+        // Unload unused
+        List<string> toRemove = new List<string>();
+        foreach (var key in loadedChunks.Keys)
+        {
+            if (!desired.ContainsKey(key)) toRemove.Add(key);
+        }
+        foreach (var key in toRemove) UnloadChunk(key);
+
+        // Create/update desired
+        foreach (var kvp in desired)
+        {
+            DesiredChunk d = kvp.Value;
+            if (!loadedChunks.TryGetValue(d.key, out ChunkData existing) || existing == null || existing.gameObject == null)
+            {
+                CreateChunk(d);
+                continue;
+            }
+
+            bool needsRegen =
+                existing.lodResolution != d.lodResolution ||
+                existing.isSuperChunk != d.isSuper ||
+                existing.superScale != d.superScale ||
+                existing.noiseChunkX != d.noiseChunkX ||
+                existing.noiseChunkY != d.noiseChunkY ||
+                existing.baseVertsPerChunk != d.baseVertsPerChunk ||
+                Mathf.Abs(existing.chunkSizeWorld - d.chunkSizeWorld) > 0.0001f;
+
+            if (needsRegen)
+            {
+                GenerateChunkGPU(d.noiseChunkX, d.noiseChunkY, existing, d.lodResolution, d.chunkSizeWorld, d.baseVertsPerChunk, d.wantCollider);
+            }
+        }
+    }
+    
+    private void UpdateChunksImmediate()
+    {
+        if (!enabled || player == null) return;
+        int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
+        int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
+        long pX = worldChunkOriginX + localChunkX;
+        long pZ = worldChunkOriginY + localChunkY;
+        
+        _runtimeChunkX = pX;
+        _runtimeChunkY = pZ;
+        current_x = pX; 
+        current_y = pZ;
+        
+        UpdateChunks(pX, pZ);
+        UpdateWaterTiles(pX, pZ);
+    }
+
+    private void ClearAllChunks()
+    {
+        foreach (var kvp in loadedChunks)
+        {
+            if (kvp.Value.gameObject != null) Destroy(kvp.Value.gameObject);
+        }
+        loadedChunks.Clear();
+    }
+
+    private void ClearAllWaterTiles()
+    {
+        foreach (var kvp in _loadedWaterTiles)
+        {
+            if (kvp.Value != null) Destroy(kvp.Value);
+        }
+        _loadedWaterTiles.Clear();
+        _loadedWaterTileRes.Clear();
+    }
+
+    /// <summary>
+    /// Teleport the *virtual world* so the player is now in the specified chunk (64-bit safe).
+    /// This keeps Unity Transform positions near 0 (no float farland), while chunk coords remain long.
+    /// </summary>
+    public void TeleportToChunk(long targetChunkX, long targetChunkY)
+    {
+        if (!enabled || player == null) return;
+
+        // Reset terrain around new location
+        ClearAllChunks();
+        ClearAllWaterTiles();
+
+        // Native long+float teleport: set the chunk-origin so current local chunk becomes the target.
+        int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
+        int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
+        worldChunkOriginX = targetChunkX - localChunkX;
+        worldChunkOriginY = targetChunkY - localChunkY;
+
+        // Keep debug/current fields aligned
+        current_x = targetChunkX;
+        current_y = targetChunkY;
+
+        UpdateChunksImmediate();
+        UpdateWaterTilesImmediate();
+    }
+
+    private float GetWaterSurfaceY()
+    {
+        float baseY = waterUseTerrainWaterLevel ? (waterLevel * heightMultiplier) : waterSurfaceY;
+        return baseY + waterSurfaceYOffset;
+    }
+
+    private int GetWaterRenderDistance()
+    {
+        int rd = waterRenderDistanceOverride > 0 ? waterRenderDistanceOverride : renderDistance;
+        return Mathf.Max(0, rd);
+    }
+
+    private static int ValidateWaterTileResolution(int res)
+    {
+        // Water tiles are flat meshes; they don't need pow2+1 constraints, but they do need to be >=2.
+        // Keep it odd by default (nicer symmetry).
+        res = Mathf.Max(2, res);
+        if ((res & 1) == 0) res += 1;
+        return res;
+    }
+
+    private int GetWaterTileResolutionForChunkDelta(int dx, int dy)
+    {
+        if (!waterEnableLod || waterLodChunkRadii == null || waterLodResolutions == null ||
+            waterLodChunkRadii.Length == 0 || waterLodResolutions.Length == 0)
+        {
+            return ValidateWaterTileResolution(waterTileResolution);
+        }
+
+        int r = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy));
+        int levels = Mathf.Min(waterLodChunkRadii.Length, waterLodResolutions.Length);
+        for (int i = 0; i < levels; i++)
+        {
+            if (r <= waterLodChunkRadii[i])
+                return ValidateWaterTileResolution(waterLodResolutions[i]);
+        }
+
+        return ValidateWaterTileResolution(waterLodResolutions[levels - 1]);
+    }
+
+    private void EnsureWaterMaterialLoaded()
+    {
+        if (!enableWaterTiles) return;
+        if (_waterMaterialLoaded != null) return;
+
+        Material mat = waterMaterialOverride != null ? waterMaterialOverride : Resources.Load<Material>(waterMaterialResourceName);
+        if (mat == null)
+        {
+            Debug.LogWarning($"Water material not found. Assign a material override, or ensure a Resources material named '{waterMaterialResourceName}' exists (IgniteCoders: Water_mat_01).");
+            return;
+        }
+
+        _waterMaterialLoaded = mat;
+    }
+
+    private Mesh GetOrCreateWaterGridMesh(int vertsPerSide, int sizeWorld)
+    {
+        vertsPerSide = ValidateWaterTileResolution(vertsPerSide);
+        sizeWorld = Mathf.Max(1, sizeWorld);
+
+        // Cache key: hi32 = vertsPerSide, lo32 = sizeWorld
+        long key = ((long)vertsPerSide << 32) | (uint)sizeWorld;
+        if (_waterMeshCache.TryGetValue(key, out Mesh cached) && cached != null) return cached;
+
+        int vps = vertsPerSide;
+        int vertCount = vps * vps;
+        int quadCount = (vps - 1) * (vps - 1);
+        int triCount = quadCount * 2;
+        int indexCount = triCount * 3;
+
+        float half = sizeWorld * 0.5f;
+        float step = sizeWorld / (float)(vps - 1);
+
+        Vector3[] vertices = new Vector3[vertCount];
+        Vector3[] normals = new Vector3[vertCount];
+        Vector2[] uvs = new Vector2[vertCount];
+        int[] tris = new int[indexCount];
+
+        int vi = 0;
+        for (int z = 0; z < vps; z++)
+        {
+            float wz = -half + (z * step);
+            float vz = (wz + half) / sizeWorld;
+            for (int x = 0; x < vps; x++)
+            {
+                float wx = -half + (x * step);
+                float vx = (wx + half) / sizeWorld;
+
+                vertices[vi] = new Vector3(wx, 0f, wz);
+                normals[vi] = Vector3.up;
+                uvs[vi] = new Vector2(vx, vz);
+                vi++;
+            }
+        }
+
+        int ti = 0;
+        for (int z = 0; z < vps - 1; z++)
+        {
+            for (int x = 0; x < vps - 1; x++)
+            {
+                int i0 = (z * vps) + x;
+                int i1 = i0 + 1;
+                int i2 = i0 + vps;
+                int i3 = i2 + 1;
+
+                // Two triangles (clockwise when viewed from above)
+                tris[ti++] = i0;
+                tris[ti++] = i2;
+                tris[ti++] = i1;
+
+                tris[ti++] = i1;
+                tris[ti++] = i2;
+                tris[ti++] = i3;
+            }
+        }
+
+        Mesh mesh = new Mesh();
+        if (vertCount > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+        mesh.name = $"WaterGrid_{sizeWorld}m_{vertsPerSide}";
+        mesh.vertices = vertices;
+        mesh.normals = normals;
+        mesh.uv = uvs;
+        mesh.triangles = tris;
+        mesh.RecalculateBounds();
+
+        _waterMeshCache[key] = mesh;
+        return mesh;
+    }
+
+    private void UpdateWaterTilesImmediate()
+    {
+        if (!enabled || player == null) return;
+
+        int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
+        int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
+        long pX = worldChunkOriginX + localChunkX;
+        long pZ = worldChunkOriginY + localChunkY;
+
+        UpdateWaterTiles(pX, pZ);
+    }
+
+    private void UpdateWaterTiles(long centerChunkX, long centerChunkY)
+    {
+        if (!enableWaterTiles) return;
+        if (!enabled || player == null) return;
+
+        EnsureWaterMaterialLoaded();
+        if (_waterMaterialLoaded == null) return;
+
+        int rd = GetWaterRenderDistance();
+
+        // Desired set (base tiles only; one per chunk)
+        HashSet<string> desired = new HashSet<string>();
+        for (int dx = -rd; dx <= rd; dx++)
+        {
+            for (int dy = -rd; dy <= rd; dy++)
+            {
+                long cx = centerChunkX + dx;
+                long cy = centerChunkY + dy;
+                string key = $"{cx}_{cy}";
+                desired.Add(key);
+
+                if (!_loadedWaterTiles.ContainsKey(key))
+                {
+                    int res = GetWaterTileResolutionForChunkDelta(dx, dy);
+                    CreateWaterTile(cx, cy, key, res);
+                }
+                else
+                {
+                    var go = _loadedWaterTiles[key];
+                    if (go != null)
+                    {
+                        // Ensure Y stays correct if heightMultiplier/waterLevel changed in play mode
+                        Vector3 p = go.transform.position;
+                        p.y = GetWaterSurfaceY();
+                        go.transform.position = p;
+
+                        // Update LOD mesh if needed
+                        int desiredRes = GetWaterTileResolutionForChunkDelta(dx, dy);
+                        if (!_loadedWaterTileRes.TryGetValue(key, out int currentRes) || currentRes != desiredRes)
+                        {
+                            MeshFilter mf = go.GetComponent<MeshFilter>();
+                            if (mf != null)
+                                mf.sharedMesh = GetOrCreateWaterGridMesh(desiredRes, chunkSize);
+                            _loadedWaterTileRes[key] = desiredRes;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Unload tiles no longer needed
+        if (_loadedWaterTiles.Count > 0)
+        {
+            List<string> remove = null;
+            foreach (var kvp in _loadedWaterTiles)
+            {
+                if (!desired.Contains(kvp.Key))
+                {
+                    remove ??= new List<string>();
+                    remove.Add(kvp.Key);
+                }
+            }
+            if (remove != null)
+            {
+                for (int i = 0; i < remove.Count; i++)
+                {
+                    string k = remove[i];
+                    if (_loadedWaterTiles.TryGetValue(k, out GameObject go) && go != null)
+                        Destroy(go);
+                    _loadedWaterTiles.Remove(k);
+                    _loadedWaterTileRes.Remove(k);
+                }
+            }
+        }
+    }
+
+    private void CreateWaterTile(long chunkX, long chunkY, string key, int resolutionVertsPerSide)
+    {
+        resolutionVertsPerSide = ValidateWaterTileResolution(resolutionVertsPerSide);
+
+        GameObject plane = new GameObject($"Water_{chunkX}_{chunkY}");
+        plane.transform.SetParent(transform, true);
+
+        long relX = chunkX - worldChunkOriginX;
+        long relY = chunkY - worldChunkOriginY;
+
+        float half = chunkSize * 0.5f;
+        plane.transform.position = new Vector3(relX * chunkSize + half, GetWaterSurfaceY(), relY * chunkSize + half);
+        plane.transform.rotation = Quaternion.identity;
+        plane.transform.localScale = Vector3.one;
+
+        var mf = plane.AddComponent<MeshFilter>();
+        mf.sharedMesh = GetOrCreateWaterGridMesh(resolutionVertsPerSide, chunkSize);
+
+        var mr = plane.AddComponent<MeshRenderer>();
+        mr.sharedMaterial = _waterMaterialLoaded;
+        mr.shadowCastingMode = waterCastShadows ? ShadowCastingMode.On : ShadowCastingMode.Off;
+        mr.receiveShadows = waterReceiveShadows;
+
+        _loadedWaterTiles[key] = plane;
+        _loadedWaterTileRes[key] = resolutionVertsPerSide;
+    }
+
+    /// <summary>
+    /// Teleport using the currently set current_x/current_y (useful when editing in Inspector).
+    /// </summary>
+    [ContextMenu("Terrain/Teleport To Current Chunk")]
+    public void TeleportToCurrentChunk()
+    {
+        TeleportToChunk(current_x, current_y);
+    }
+
+    private void UnloadChunk(string key)
+    {
+        if (loadedChunks.TryGetValue(key, out ChunkData data))
+        {
+            if (data.gameObject != null) Destroy(data.gameObject);
+            loadedChunks.Remove(key);
+        }
+    }
+    
+    /// <summary>
+    /// Exits/unloads the chunk at the current x,y position
+    /// </summary>
+    [ContextMenu("Terrain/Exit Current Chunk")]
+    public void ExitCurrentChunk()
+    {
+        string key = $"{current_x}_{current_y}";
+        if (loadedChunks.ContainsKey(key))
+        {
+            UnloadChunk(key);
+        }
+    }
+    
+    /// <summary>
+    /// Exits/unloads a specific chunk by coordinates
+    /// </summary>
+    public void ExitChunk(long x, long y)
+    {
+        string key = $"{x}_{y}";
+        if (loadedChunks.ContainsKey(key))
+        {
+            UnloadChunk(key);
+        }
+    }
+
+    private void CreateChunk(DesiredChunk d)
+    {
+        if (!enabled) return; // Don't create chunks if script is disabled
+        
+        if (terrainComputeShader == null)
+        {
+            Debug.LogWarning($"Cannot create chunk {d.key}: Terrain Compute Shader is not assigned!");
+            return;
+        }
+
+        GameObject chunkObj = new GameObject(d.isSuper
+            ? $"SuperChunk_{d.superScale}_{d.noiseChunkX}_{d.noiseChunkY}"
+            : $"Chunk_{d.noiseChunkX}_{d.noiseChunkY}");
+        
+        // Local position is based on relative chunk delta from the chunk-origin.
+        // Delta is always small (renderDistance) so floats are safe.
+        long relX = d.minBaseChunkX - worldChunkOriginX;
+        long relY = d.minBaseChunkY - worldChunkOriginY;
+        Vector3 localPos = new Vector3(relX * chunkSize, 0, relY * chunkSize);
+        
+        chunkObj.transform.position = localPos;
+        chunkObj.transform.parent = transform;
+        chunkObj.layer = LayerMask.NameToLayer("Default");
+
+        ChunkData data = new ChunkData
+        {
+            gameObject = chunkObj,
+            isReady = false,
+            lodResolution = 0,
+            isSuperChunk = d.isSuper,
+            superScale = d.superScale,
+            noiseChunkX = d.noiseChunkX,
+            noiseChunkY = d.noiseChunkY,
+            baseVertsPerChunk = d.baseVertsPerChunk,
+            chunkSizeWorld = d.chunkSizeWorld
+        };
+        loadedChunks[d.key] = data;
+
+        GenerateChunkGPU(d.noiseChunkX, d.noiseChunkY, data, d.lodResolution, d.chunkSizeWorld, d.baseVertsPerChunk, d.wantCollider);
+    }
+
+    private void GenerateChunkGPU(long noiseChunkX, long noiseChunkY, ChunkData data, int lodResolution, float chunkSizeWorld, int baseVertsPerChunkOverride, bool wantCollider)
+    {
+        if (!enabled) return; // Don't generate chunks if script is disabled
+        
+        lodResolution = ChunkLodUtility.ValidatePow2Plus1LodResolution(resolution, lodResolution, 9);
+        data.isReady = false;
+        data.lodResolution = lodResolution;
+        data.noiseChunkX = noiseChunkX;
+        data.noiseChunkY = noiseChunkY;
+        data.baseVertsPerChunk = Mathf.Max(1, baseVertsPerChunkOverride);
+        data.chunkSizeWorld = chunkSizeWorld;
+
+        // Noise Generation uses Absolute Coordinates (cx, cy) directly!
+        // No virtual offsets needed, cx/cy ARE the virtual offsets.
+        
+        int kernelHeight = terrainComputeShader.FindKernel("GenerateHeightmap");
+        int kernelErode = terrainComputeShader.FindKernel("ErodeHeightmap");
+        int kernelSmooth = terrainComputeShader.FindKernel("SmoothHeightmap");
+        int kernelBiome = terrainComputeShader.FindKernel("GenerateBiomeMap");
+        int kernelNormal = terrainComputeShader.FindKernel("CalculateNormals");
+        int kernelMesh = terrainComputeShader.FindKernel("GenerateMesh");
+        
+        // Verify all required kernels exist
+        if (kernelHeight < 0 || kernelErode < 0 || kernelSmooth < 0 || kernelBiome < 0 || 
+            kernelNormal < 0 || kernelMesh < 0)
+        {
+            Debug.LogError($"Compute shader kernels not found for chunk {noiseChunkX}_{noiseChunkY}! " +
+                $"Kernels: Height={kernelHeight}, Erode={kernelErode}, Smooth={kernelSmooth}, " +
+                $"Biome={kernelBiome}, Normal={kernelNormal}, Mesh={kernelMesh}. " +
+                "The compute shader may not have compiled correctly for the target platform.");
+            return;
+        }
+        
+        // Buffers
+        int vertCount = lodResolution * lodResolution;
+        
+        // Heightmap ping-pong for post process (erosion/smoothing) - avoids read/write hazards
+        RenderTexture heightMapA = new RenderTexture(lodResolution, lodResolution, 0, RenderTextureFormat.RFloat);
+        heightMapA.enableRandomWrite = true;
+        heightMapA.Create();
+
+        RenderTexture heightMapB = new RenderTexture(lodResolution, lodResolution, 0, RenderTextureFormat.RFloat);
+        heightMapB.enableRandomWrite = true;
+        heightMapB.Create();
+        
+        RenderTexture biomeMap = new RenderTexture(lodResolution, lodResolution, 0, RenderTextureFormat.ARGBFloat);
+        biomeMap.enableRandomWrite = true;
+        biomeMap.Create();
+
+        ComputeBuffer vertBuffer = new ComputeBuffer(vertCount, sizeof(float) * 3);
+        ComputeBuffer uvBuffer = new ComputeBuffer(vertCount, sizeof(float) * 2);
+        ComputeBuffer normalBuffer = new ComputeBuffer(vertCount, sizeof(float) * 3);
+        ComputeBuffer triBuffer = new ComputeBuffer((lodResolution - 1) * (lodResolution - 1) * 6, sizeof(int));
+
+        // Parameters - Pass doubles as floats? 
+        // Compute shader only supports float. 
+        // Wait, for Perlin Noise at 1,000,000, precision issues occur with float.
+        // Standard Perlin uses (float x, float y).
+        // Solution: Modulo or reset origin for noise?
+        // Infinite Perlin noise usually requires doubles or origin shifts.
+        // For now, we just pass the large float. Floating Origin handles rendering precision.
+        // But Noise precision will degrade after ~100k units.
+        // Fix: Use a hash-based or tiled noise where (x,y) are hashed integers?
+        // Current implementation is `float2 worldPos = float2(chunkX * chunkSize, ...)`.
+        // This will jitter visually at 100k+.
+        // However, for this task, we assume the user accepts noise limits or we'd need a double-precision noise library.
+        // Let's rely on standard float behavior for now, it's "Infinite" enough for most games.
+        
+        terrainComputeShader.SetFloat("chunkSize", chunkSizeWorld);
+        terrainComputeShader.SetInt("resolution", lodResolution);
+        terrainComputeShader.SetInt("baseVertsPerChunk", Mathf.Max(1, baseVertsPerChunkOverride));
+        terrainComputeShader.SetFloat("heightMultiplier", heightMultiplier);
+        terrainComputeShader.SetInt("octaves", octaves);
+        terrainComputeShader.SetFloat("persistence", persistence);
+        terrainComputeShader.SetFloat("lacunarity", lacunarity);
+        terrainComputeShader.SetInt("seed", seed);
+
+        // Stable-at-infinity noise configuration (no float world coordinates in shader)
+        SetLongAsUInt2(terrainComputeShader, "chunkXLo", "chunkXHi", noiseChunkX);
+        SetLongAsUInt2(terrainComputeShader, "chunkYLo", "chunkYHi", noiseChunkY);
+        terrainComputeShader.SetInt("baseNoiseShift", ComputeNoiseShift(noiseScale));
+        terrainComputeShader.SetInt("moistureNoiseShift", ComputeNoiseShift(0.002f));
+        terrainComputeShader.SetInt("temperatureNoiseShift", ComputeNoiseShift(0.003f));
+        terrainComputeShader.SetFloat("mountainStrength", mountainStrength);
+        terrainComputeShader.SetFloat("plainStrength", plainStrength);
+        terrainComputeShader.SetFloat("erosionStrength", erosionStrength);
+        terrainComputeShader.SetFloat("domainWarpStrength", domainWarpStrength);
+
+        // Post-process tuning: drive iterations/thresholds from erosionStrength so user doesn't need new knobs
+        int erosionIterations = Mathf.RoundToInt(Mathf.Lerp(0f, 12f, Mathf.Clamp01(erosionStrength)));
+        int smoothIterations = Mathf.RoundToInt(Mathf.Lerp(0f, 2f, Mathf.Clamp01(erosionStrength)));
+        float talus = Mathf.Lerp(heightMultiplier * 0.02f, heightMultiplier * 0.004f, Mathf.Clamp01(erosionStrength));
+        float amount = Mathf.Lerp(0f, 0.35f, Mathf.Clamp01(erosionStrength));
+        float smooth = Mathf.Lerp(0f, 0.65f, Mathf.Clamp01(erosionStrength));
+        terrainComputeShader.SetFloat("erosionTalus", talus);
+        terrainComputeShader.SetFloat("erosionAmount", amount);
+        terrainComputeShader.SetFloat("smoothStrength", smooth);
+
+        // Dispatch
+        int groups = Mathf.CeilToInt(lodResolution / 8f);
+
+        try
+        {
+            // 1) Height
+            terrainComputeShader.SetTexture(kernelHeight, "HeightMap", heightMapA);
+            terrainComputeShader.Dispatch(kernelHeight, groups, groups, 1);
+
+            // 2) Erosion (ping-pong)
+            RenderTexture src = heightMapA;
+            RenderTexture dst = heightMapB;
+            for (int i = 0; i < erosionIterations; i++)
+            {
+                terrainComputeShader.SetTexture(kernelErode, "HeightMapIn", src);
+                terrainComputeShader.SetTexture(kernelErode, "HeightMapOut", dst);
+                terrainComputeShader.Dispatch(kernelErode, groups, groups, 1);
+                RenderTexture tmp = src;
+                src = dst;
+                dst = tmp;
+            }
+
+            // 3) Small blur to remove remaining needle peaks while preserving features
+            for (int i = 0; i < smoothIterations; i++)
+            {
+                terrainComputeShader.SetTexture(kernelSmooth, "HeightMapIn", src);
+                terrainComputeShader.SetTexture(kernelSmooth, "HeightMapOut", dst);
+                terrainComputeShader.Dispatch(kernelSmooth, groups, groups, 1);
+                RenderTexture tmp = src;
+                src = dst;
+                dst = tmp;
+            }
+
+            // 4) Biome map from final height
+            terrainComputeShader.SetTexture(kernelBiome, "HeightMap", src);
+            terrainComputeShader.SetTexture(kernelBiome, "BiomeMap", biomeMap);
+            terrainComputeShader.Dispatch(kernelBiome, groups, groups, 1);
+
+            // 5) Normals/Mesh from final height
+            terrainComputeShader.SetTexture(kernelNormal, "HeightMap", src);
+            terrainComputeShader.SetBuffer(kernelNormal, "Normals", normalBuffer);
+            terrainComputeShader.Dispatch(kernelNormal, groups, groups, 1);
+
+            terrainComputeShader.SetTexture(kernelMesh, "HeightMap", src);
+            terrainComputeShader.SetBuffer(kernelMesh, "Vertices", vertBuffer);
+            terrainComputeShader.SetBuffer(kernelMesh, "UVs", uvBuffer);
+            terrainComputeShader.SetBuffer(kernelMesh, "Triangles", triBuffer);
+            terrainComputeShader.Dispatch(kernelMesh, groups, groups, 1);
+
+            // Readback
+            Vector3[] vertices = new Vector3[vertCount];
+            vertBuffer.GetData(vertices);
+            
+            Vector2[] uvs = new Vector2[vertCount];
+            uvBuffer.GetData(uvs);
+            
+            Vector3[] normals = new Vector3[vertCount];
+            normalBuffer.GetData(normals);
+            
+            int[] triangles = new int[(lodResolution - 1) * (lodResolution - 1) * 6];
+            triBuffer.GetData(triangles);
+
+            // Validate GPU output to avoid spamming Mesh errors if a kernel failed to dispatch/compile
+            for (int i = 0; i < Mathf.Min(vertices.Length, 256); i++)
+            {
+                Vector3 v = vertices[i];
+                if (float.IsNaN(v.x) || float.IsNaN(v.y) || float.IsNaN(v.z) ||
+                    float.IsInfinity(v.x) || float.IsInfinity(v.y) || float.IsInfinity(v.z))
+                {
+                    Debug.LogError($"GPU mesh data invalid (NaN/Inf) for chunk {noiseChunkX}_{noiseChunkY}. Skipping mesh build. Check compute shader compile errors in Console.");
+                    return;
+                }
+            }
+
+            for (int i = 0; i < triangles.Length; i++)
+            {
+                int t = triangles[i];
+                if ((uint)t >= (uint)vertCount)
+                {
+                    Debug.LogError($"GPU triangle index out of bounds for chunk {noiseChunkX}_{noiseChunkY} (tri[{i}]={t}, vertCount={vertCount}). Skipping mesh build. Check compute shader compile errors in Console.");
+                    return;
+                }
+            }
+
+            Mesh mesh = new Mesh();
+            if (vertCount > 65535) mesh.indexFormat = IndexFormat.UInt32;
+            mesh.vertices = vertices;
+            mesh.uv = uvs;
+            mesh.normals = normals;
+            mesh.triangles = triangles;
+            mesh.RecalculateBounds();
+            
+            // Optional skirt to hide tiny cracks from LOD T-junctions (doesn't fix true height discontinuities).
+            if (skirtDepth > 0.001f)
+            {
+                AddSkirt(ref mesh, lodResolution, skirtDepth);
+            }
+
+            MeshFilter mf = data.gameObject.GetComponent<MeshFilter>();
+            if (mf == null) mf = data.gameObject.AddComponent<MeshFilter>();
+            MeshRenderer mr = data.gameObject.GetComponent<MeshRenderer>();
+            if (mr == null) mr = data.gameObject.AddComponent<MeshRenderer>();
+            MeshCollider mc = data.gameObject.GetComponent<MeshCollider>();
+            if (wantCollider)
+            {
+                if (mc == null) mc = data.gameObject.AddComponent<MeshCollider>();
+            }
+            else
+            {
+                if (mc != null) Destroy(mc);
+            }
+            
+            mf.mesh = mesh;
+            mr.material = terrainMaterial;
+            // Update material properties
+            UpdateMaterialProperties();
+            if (wantCollider)
+            {
+                // Re-fetch in case it was destroyed/added
+                mc = data.gameObject.GetComponent<MeshCollider>();
+                if (mc != null) mc.sharedMesh = mesh;
+            }
+            
+            data.isReady = true;
+        }
+        finally
+        {
+            // Always release GPU resources
+            heightMapA.Release();
+            heightMapB.Release();
+            biomeMap.Release();
+            vertBuffer.Release();
+            uvBuffer.Release();
+            normalBuffer.Release();
+            triBuffer.Release();
+        }
+    }
+
+    private void AddSkirt(ref Mesh mesh, int res, float depth)
+    {
+        // Duplicate border vertices and push them down to create a vertical "skirt".
+        // This hides sub-pixel cracks caused by LOD T-junctions and rasterization.
+        // Border count: top+bottom+left+right, without double-counting corners => 4*(res-1)
+        if (mesh == null || res < 3) return;
+
+        Vector3[] v = mesh.vertices;
+        Vector2[] uv = mesh.uv;
+        Vector3[] n = mesh.normals;
+        int[] t = mesh.triangles;
+
+        int borderCount = 4 * (res - 1);
+        int baseVertCount = v.Length;
+        Vector3[] v2 = new Vector3[baseVertCount + borderCount];
+        Vector2[] uv2 = new Vector2[uv.Length + borderCount];
+        Vector3[] n2 = new Vector3[n.Length + borderCount];
+        Array.Copy(v, v2, baseVertCount);
+        Array.Copy(uv, uv2, uv.Length);
+        Array.Copy(n, n2, n.Length);
+
+        // Build border index list in clockwise order.
+        int[] border = new int[borderCount];
+        int k = 0;
+        // bottom row (z=0): x 0..res-2
+        for (int x = 0; x < res - 1; x++) border[k++] = x;
+        // right col (x=res-1): z 0..res-2
+        for (int z = 0; z < res - 1; z++) border[k++] = (res - 1) + z * res;
+        // top row (z=res-1): x res-1..1
+        for (int x = res - 1; x > 0; x--) border[k++] = x + (res - 1) * res;
+        // left col (x=0): z res-1..1
+        for (int z = res - 1; z > 0; z--) border[k++] = z * res;
+
+        // Add skirt verts
+        for (int i = 0; i < borderCount; i++)
+        {
+            int src = border[i];
+            int dst = baseVertCount + i;
+            Vector3 p = v[src];
+            p.y -= Mathf.Abs(depth);
+            v2[dst] = p;
+            uv2[dst] = uv[src];
+            n2[dst] = n[src];
+        }
+
+        // Add triangles: for each border edge, connect top border vertex to its skirt copy.
+        int extraTris = borderCount * 6;
+        int[] t2 = new int[t.Length + extraTris];
+        Array.Copy(t, t2, t.Length);
+        int ti = t.Length;
+        for (int i = 0; i < borderCount; i++)
+        {
+            int next = (i + 1) % borderCount;
+            int a = border[i];
+            int b = border[next];
+            int a2i = baseVertCount + i;
+            int b2i = baseVertCount + next;
+            // Two triangles (a, b, b2) and (a, b2, a2)
+            t2[ti++] = a;
+            t2[ti++] = b;
+            t2[ti++] = b2i;
+            t2[ti++] = a;
+            t2[ti++] = b2i;
+            t2[ti++] = a2i;
+        }
+
+        mesh.vertices = v2;
+        mesh.uv = uv2;
+        mesh.normals = n2;
+        mesh.triangles = t2;
+        mesh.RecalculateBounds();
+    }
+    
+    // CPU Noise for Safety
+    private void UpdatePlayerSafety(long playerChunkX, long playerChunkY, float inChunkX, float inChunkZ)
+    {
+        if (!enabled) return; // Don't run safety checks if script is disabled
+        
+        // Get actual terrain height; raycast ignores player's own colliders.
+        float actualTerrainHeight;
+        if (!TryGetTerrainHeightRaycast(player.position, out actualTerrainHeight))
+        {
+            // Fallback to approximated height if raycast doesn't hit (terrain might not be loaded)
+            actualTerrainHeight = GetTerrainHeightCPU(playerChunkX, playerChunkY, inChunkX, inChunkZ);
+        }
+        
+        // Get player velocity to check if jumping
+        Rigidbody rb = player.GetComponent<Rigidbody>();
+        bool isJumping = rb != null && rb.linearVelocity.y > 2.0f; // Only consider significant upward velocity as jumping
+        
+        // Teleport if player is below terrain, but don't fight an active jump.
+        float safetyThreshold = actualTerrainHeight - Mathf.Max(0.1f, recoverBelowTerrain);
+        
+        bool isHardVoid = player.position.y < hardVoidY;
+        if ((isHardVoid || !isJumping) && player.position.y < safetyThreshold)
+        {
+            // Player is below terrain and not jumping - teleport to safety
+            Vector3 newPos = player.position;
+            newPos.y = actualTerrainHeight + safetyHeightOffset + 5.0f; 
+            player.position = newPos;
+            
+            if (rb != null) rb.linearVelocity = new Vector3(rb.linearVelocity.x, 0, rb.linearVelocity.z);
+        }
+    }
+
+    // CPU approximation for safety checks (stable at infinity; no float world coordinate dependence)
+    private static uint Hash32(uint x)
+    {
+        x ^= x >> 16;
+        x *= 0x7feb352d;
+        x ^= x >> 15;
+        x *= 0x846ca68b;
+        x ^= x >> 16;
+        return x;
+    }
+
+    private static uint HashCombine(uint h, uint v)
+    {
+        unchecked
+        {
+            return Hash32(h ^ (v + 0x9e3779b9u + (h << 6) + (h >> 2)));
+        }
+    }
+
+    private static float HashTo01(uint h) => (h & 0x00FFFFFFu) / 16777216.0f;
+
+    private static float Hash2D64(ulong x, ulong y, uint salt)
+    {
+        uint h = Hash32(salt);
+        h = HashCombine(h, (uint)x);
+        h = HashCombine(h, (uint)(x >> 32));
+        h = HashCombine(h, (uint)y);
+        h = HashCombine(h, (uint)(y >> 32));
+        return HashTo01(h);
+    }
+
+    private static float ValueNoise64(ulong gx, ulong gz, int shift, uint salt)
+    {
+        shift = Mathf.Clamp(shift, 0, 30);
+        if (shift == 0) return Hash2D64(gx, gz, salt);
+
+        ulong mask = (1ul << shift) - 1ul;
+        float fx = (gx & mask) / (float)(1ul << shift);
+        float fz = (gz & mask) / (float)(1ul << shift);
+        float ux = fx * fx * (3f - 2f * fx);
+        float uz = fz * fz * (3f - 2f * fz);
+
+        ulong cellX = gx >> shift;
+        ulong cellZ = gz >> shift;
+
+        float a = Hash2D64(cellX, cellZ, salt);
+        float b = Hash2D64(cellX + 1ul, cellZ, salt);
+        float c = Hash2D64(cellX, cellZ + 1ul, salt);
+        float d = Hash2D64(cellX + 1ul, cellZ + 1ul, salt);
+
+        float ab = Mathf.Lerp(a, b, ux);
+        float cd = Mathf.Lerp(c, d, ux);
+        return Mathf.Lerp(ab, cd, uz);
+    }
+
+    private static float Fbm64(ulong gx, ulong gz, int baseShift, int oct, float pers, uint saltBase)
+    {
+        float value = 0f;
+        float amplitude = 0.5f;
+        float maxValue = 0f;
+
+        for (int i = 0; i < oct; i++)
+        {
+            int s = Mathf.Max(0, baseShift - i);
+            value += amplitude * ValueNoise64(gx, gz, s, saltBase + (uint)(i * 1013));
+            maxValue += amplitude;
+            amplitude *= pers;
+        }
+
+        return value / Mathf.Max(maxValue, 1e-6f);
+    }
+
+    private float GetTerrainHeightCPU(long chunkX, long chunkY, float inChunkX, float inChunkZ)
+    {
+        // Match the shader's integer base vertex-grid space (approximation).
+        int vertsPerChunk = Mathf.Max(1, resolution - 1);
+        float stepWorld = chunkSize / (float)vertsPerChunk;
+
+        int vx = Mathf.Clamp(Mathf.RoundToInt(inChunkX / stepWorld), 0, vertsPerChunk);
+        int vz = Mathf.Clamp(Mathf.RoundToInt(inChunkZ / stepWorld), 0, vertsPerChunk);
+
+        ulong gx = unchecked((ulong)chunkX) * (ulong)vertsPerChunk + (ulong)vx;
+        ulong gz = unchecked((ulong)chunkY) * (ulong)vertsPerChunk + (ulong)vz;
+
+        uint s0 = Hash32((uint)seed ^ 0xA341316Cu);
+        float continents = Fbm64(gx, gz, ComputeNoiseShift(noiseScale) + 4, 3, 0.5f, s0);
+
+        float height01 = (continents < 0.30f) ? (continents * 0.80f) : continents;
+        if (continents > 0.6f) height01 += 0.2f * mountainStrength;
+
+        return Mathf.Clamp01(height01) * heightMultiplier;
+    }
+
+    private void OnDisable()
+    {
+        // Stop all coroutines when script is disabled
+        if (_placePlayerCoroutine != null)
+        {
+            StopCoroutine(_placePlayerCoroutine);
+            _placePlayerCoroutine = null;
+        }
+    }
+
+    private void OnDestroy()
+    {
+        // Cleanup is handled by UnloadChunk when chunks are destroyed
+        OnDisable(); // Ensure coroutines are stopped
+    }
+}

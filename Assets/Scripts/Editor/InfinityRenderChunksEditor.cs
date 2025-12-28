@@ -1,7 +1,7 @@
 using UnityEditor;
 using UnityEngine;
 
-[CustomEditor(typeof(InfinityRenderChunks))]
+[CustomEditor(typeof(InfinityTerrain.InfinityRenderChunks))]
 public class InfinityRenderChunksEditor : Editor
 {
     private bool _snapUp = true;
@@ -10,38 +10,65 @@ public class InfinityRenderChunksEditor : Editor
     {
         DrawDefaultInspector();
 
-        var t = (InfinityRenderChunks)target;
+        var t = (InfinityTerrain.InfinityRenderChunks)target;
         if (t == null) return;
 
         EditorGUILayout.Space(8);
-        EditorGUILayout.LabelField("LOD Validation", EditorStyles.boldLabel);
+        EditorGUILayout.LabelField("Terrain LOD Validation", EditorStyles.boldLabel);
 
         if (t.IsLodConfigValid(out string error))
         {
-            EditorGUILayout.HelpBox("LOD config OK.", MessageType.Info);
-            return;
+            EditorGUILayout.HelpBox("Terrain LOD config OK.", MessageType.Info);
+        }
+        else
+        {
+            EditorGUILayout.HelpBox(error, MessageType.Error);
+
+            _snapUp = EditorGUILayout.ToggleLeft(
+                new GUIContent("Fix: snap base resolution UP (200→257). If off: snap DOWN (200→129)."),
+                _snapUp
+            );
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("Fix Terrain LOD Config", GUILayout.Height(28)))
+                {
+                    Undo.RecordObject(t, "Fix Terrain LOD Config");
+                    t.FixLodConfig(_snapUp);
+                    EditorUtility.SetDirty(t);
+                }
+
+                if (GUILayout.Button("Revalidate", GUILayout.Height(28)))
+                {
+                    Repaint();
+                }
+            }
         }
 
-        EditorGUILayout.HelpBox(error, MessageType.Error);
+        EditorGUILayout.Space(8);
+        EditorGUILayout.LabelField("Water LOD Validation", EditorStyles.boldLabel);
 
-        _snapUp = EditorGUILayout.ToggleLeft(
-            new GUIContent("Fix: snap base resolution UP (200→257). If off: snap DOWN (200→129)."),
-            _snapUp
-        );
-
-        using (new EditorGUILayout.HorizontalScope())
+        if (t.IsWaterLodConfigValid(out string waterError))
         {
-            if (GUILayout.Button("Fix LOD Config", GUILayout.Height(28)))
-            {
-                Undo.RecordObject(t, "Fix LOD Config");
-                t.FixLodConfig(_snapUp);
-                EditorUtility.SetDirty(t);
-            }
+            EditorGUILayout.HelpBox("Water LOD config OK.", MessageType.Info);
+        }
+        else
+        {
+            EditorGUILayout.HelpBox(waterError, MessageType.Error);
 
-            if (GUILayout.Button("Revalidate", GUILayout.Height(28)))
+            using (new EditorGUILayout.HorizontalScope())
             {
-                // just repaint
-                Repaint();
+                if (GUILayout.Button("Fix Water LOD Config", GUILayout.Height(28)))
+                {
+                    Undo.RecordObject(t, "Fix Water LOD Config");
+                    t.FixWaterLodConfig();
+                    EditorUtility.SetDirty(t);
+                }
+
+                if (GUILayout.Button("Revalidate", GUILayout.Height(28)))
+                {
+                    Repaint();
+                }
             }
         }
     }

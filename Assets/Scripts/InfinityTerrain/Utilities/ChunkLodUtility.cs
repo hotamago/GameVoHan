@@ -1,0 +1,125 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace InfinityTerrain.Utilities
+{
+    /// <summary>
+    /// Shared helpers for chunk-based LOD selection and validation.
+    /// Designed to be reusable for both terrain chunks and any other chunk-tiled renderers (e.g., water).
+    /// </summary>
+    public static class ChunkLodUtility
+    {
+        public static bool IsPow2(int v) => (v > 0) && ((v & (v - 1)) == 0);
+
+        /// <summary>
+        /// Snap an integer resolution to a valid (2^n + 1) in [min..max].
+        /// </summary>
+        public static int SnapToPow2Plus1(int res, bool snapUp, int min = 9, int max = 2049)
+        {
+            res = Mathf.Clamp(res, min, max);
+            if ((res & 1) == 0) res += 1; // keep odd
+
+            int baseVerts = Mathf.Max(1, res - 1);
+            if (IsPow2(baseVerts)) return res;
+
+            int p = 1;
+            while (p < baseVerts && p < (1 << 30)) p <<= 1;
+            int up = p + 1;
+            int down = (p >> 1) + 1;
+            if (down < min) down = min;
+            if (up > max) up = max;
+
+            return snapUp ? up : down;
+        }
+
+        /// <summary>
+        /// Build a LOD ladder: baseRes, baseRes/2, baseRes/4, ... down to minRes.
+        /// Assumes baseRes is already 2^n+1.
+        /// </summary>
+        public static int[] BuildPow2Plus1LodResolutions(int baseResolution, int minResolution = 9)
+        {
+            List<int> list = new List<int>(8);
+            int r = Mathf.Max(minResolution, baseResolution);
+            while (r >= minResolution)
+            {
+                list.Add(r);
+                int verts = r - 1;
+                if (verts <= (minResolution - 1)) break;
+                r = (verts / 2) + 1;
+            }
+            return list.ToArray();
+        }
+
+        /// <summary>
+        /// Ensure radii length matches levels. Keeps existing entries, fills missing with a sensible ramp,
+        /// and forces the last entry to 999 as a catch-all.
+        /// </summary>
+        public static int[] ResizeRadiiToMatchLevels(int[] radii, int levels)
+        {
+            levels = Mathf.Max(1, levels);
+            if (radii == null || radii.Length == 0) radii = new int[] { 1, 2, 4, 999 };
+            if (radii.Length == levels) return radii;
+
+            int[] newR = new int[levels];
+            for (int i = 0; i < levels; i++)
+            {
+                newR[i] = (i < radii.Length) ? radii[i] : (i == newR.Length - 1 ? 999 : (i + 1));
+            }
+            newR[newR.Length - 1] = 999;
+            return newR;
+        }
+
+        /// <summary>
+        /// Validate and snap a LOD resolution for a given base resolution (both are expected to be 2^n+1).
+        /// Enforces: odd, (lodRes-1) pow2, lodRes in [min..base], and (base-1) divisible by (lodRes-1).
+        /// </summary>
+        public static int ValidatePow2Plus1LodResolution(int baseResolution, int lodRes, int minResolution = 9)
+        {
+            lodRes = Mathf.Clamp(lodRes, minResolution, baseResolution);
+            if ((lodRes & 1) == 0) lodRes += 1;
+
+            int baseVerts = Mathf.Max(1, baseResolution - 1);
+            int lodVerts = Mathf.Max(1, lodRes - 1);
+
+            if (baseVerts % lodVerts != 0 || !IsPow2(lodVerts))
+            {
+                // Find largest power-of-two divisor of baseVerts that is <= lodVerts.
+                int best = Mathf.Max(1, minResolution - 1);
+                for (int p = best; p <= baseVerts; p <<= 1)
+                {
+                    if (p <= lodVerts && (baseVerts % p == 0)) best = p;
+                }
+                lodRes = best + 1;
+            }
+
+            return lodRes;
+        }
+
+        /// <summary>
+        /// Pick a LOD resolution based on Chebyshev chunk distance from center.
+        /// </summary>
+        public static int GetPow2Plus1LodResolutionForChunkDelta(
+            int dx,
+            int dy,
+            bool enableLod,
+            int baseResolution,
+            int[] lodChunkRadii,
+            int[] lodResolutions,
+            int minResolution = 9)
+        {
+            if (!enableLod || lodChunkRadii == null || lodResolutions == null || lodChunkRadii.Length == 0 || lodResolutions.Length == 0)
+                return baseResolution;
+
+            int r = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy));
+            int levels = Mathf.Min(lodChunkRadii.Length, lodResolutions.Length);
+            for (int i = 0; i < levels; i++)
+            {
+                if (r <= lodChunkRadii[i])
+                    return ValidatePow2Plus1LodResolution(baseResolution, lodResolutions[i], minResolution);
+            }
+
+            return ValidatePow2Plus1LodResolution(baseResolution, lodResolutions[levels - 1], minResolution);
+        }
+    }
+}
+

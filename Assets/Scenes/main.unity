@@ -15,9 +15,9 @@ RenderSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 10
   m_Fog: 0
-  m_FogColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
+  m_FogColor: {r: 0.9411765, g: 0.9019608, b: 0.5490196, a: 1}
   m_FogMode: 3
-  m_FogDensity: 0.01
+  m_FogDensity: 0.005
   m_LinearFogStart: 0
   m_LinearFogEnd: 300
   m_AmbientSkyColor: {r: 0.212, g: 0.227, b: 0.259, a: 1}
@@ -26,14 +26,14 @@ RenderSettings:
   m_AmbientIntensity: 1
   m_AmbientMode: 0
   m_SubtractiveShadowColor: {r: 0.42, g: 0.478, b: 0.627, a: 1}
-  m_SkyboxMaterial: {fileID: 10304, guid: 0000000000000000f000000000000000, type: 0}
+  m_SkyboxMaterial: {fileID: 2100000, guid: fa95802f80bd745cfb5e9c89f7e22341, type: 2}
   m_HaloStrength: 0.5
   m_FlareStrength: 1
   m_FlareFadeSpeed: 3
   m_HaloTexture: {fileID: 0}
   m_SpotCookie: {fileID: 10001, guid: 0000000000000000e000000000000000, type: 0}
   m_DefaultReflectionMode: 0
-  m_DefaultReflectionResolution: 128
+  m_DefaultReflectionResolution: 2048
   m_ReflectionBounces: 1
   m_ReflectionIntensity: 1
   m_CustomReflection: {fileID: 0}
@@ -93,7 +93,7 @@ LightmapSettings:
     m_ExportTrainingData: 0
     m_TrainingDataDestination: TrainingData
     m_LightProbeSampleCountMultiplier: 4
-  m_LightingDataAsset: {fileID: 20201, guid: 0000000000000000f000000000000000, type: 0}
+  m_LightingDataAsset: {fileID: 112000000, guid: 191965ea5d338994ab4f8481e4ac2674, type: 2}
   m_LightingSettings: {fileID: 0}
 --- !u!196 &4
 NavMeshSettings:
@@ -357,7 +357,7 @@ MonoBehaviour:
   m_GameObject: {fileID: 953848054}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 23cb5881119bef541bf224c9a669be60, type: 3}
+  m_Script: {fileID: 11500000, guid: ff69095c502a39b48b9d4ed14b3f5522, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderChunks
   player: {fileID: 86797383}
@@ -371,7 +371,7 @@ MonoBehaviour:
   autoPlacePlayerOnStart: 1
   spawnHeightOffset: 5
   enableSafety: 1
-  safetyHeightOffset: 10
+  safetyHeightOffset: 2
   groundCheckDistance: 0.5
   hardVoidY: -500
   recoverBelowTerrain: 5
@@ -384,10 +384,10 @@ MonoBehaviour:
   enableLod: 1
   lodChunkRadii: 010000000200000004000000e7030000
   lodResolutions: 81000000410000002100000011000000
-  skirtDepth: 1
+  skirtDepth: 0
   enableFarSuperChunks: 1
   superChunkScale: 3
-  superChunkStartRadius: 2
+  superChunkStartRadius: 4
   superChunksHaveCollider: 0
   mountainStrength: 0.4
   plainStrength: 0.3
@@ -395,9 +395,22 @@ MonoBehaviour:
   domainWarpStrength: 2
   waterLevel: 0.4
   beachLevel: 0.45
-  grassLevel: 0.6
-  rockLevel: 0.8
+  grassLevel: 0.5
+  rockLevel: 0.75
   snowLevel: 0.9
+  enableWaterTiles: 1
+  waterMaterialOverride: {fileID: 2100000, guid: 8759ec410a6774b4ea13ae32dc2b8d2e, type: 2}
+  waterMaterialResourceName: Water_mat_02
+  waterRenderDistanceOverride: 0
+  waterEnableLod: 1
+  waterTileResolution: 33
+  waterLodChunkRadii: 010000000200000004000000e7030000
+  waterLodResolutions: 21000000110000000900000005000000
+  waterSurfaceY: 0
+  waterUseTerrainWaterLevel: 1
+  waterCastShadows: 0
+  waterReceiveShadows: 1
+  waterSurfaceYOffset: 0.02
   terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
   proceduralTerrainShader: {fileID: 4800000, guid: 3496a8c2308eae241a457749b5ec9a2a, type: 3}
 --- !u!4 &953848056
