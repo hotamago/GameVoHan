@@ -110,6 +110,9 @@ public class InfinityRenderChunks : MonoBehaviour
     private long _runtimeChunkX;
     private long _runtimeChunkY;
 
+    // Coroutine references for cleanup
+    private Coroutine _placePlayerCoroutine;
+
     private static void SetLongAsUInt2(ComputeShader cs, string loName, string hiName, long value)
     {
         // Preserve two's complement bit pattern so negative coords stay deterministic.
@@ -139,6 +142,7 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private void Start()
     {
+        if (!enabled) return;
         if (player == null)
         {
              GameObject p = GameObject.FindGameObjectWithTag("Player");
@@ -176,7 +180,7 @@ public class InfinityRenderChunks : MonoBehaviour
         if (autoPlacePlayerOnStart)
         {
             // Delay 1+ frames so other Start()s / spawning can finish, and so terrain generation kicks off.
-            StartCoroutine(PlacePlayerAboveTerrainWhenPlayerReady());
+            _placePlayerCoroutine = StartCoroutine(PlacePlayerAboveTerrainWhenPlayerReady());
         }
     }
 
@@ -186,6 +190,9 @@ public class InfinityRenderChunks : MonoBehaviour
         const int tries = 60;
         for (int i = 0; i < tries; i++)
         {
+            // Check if script is still enabled
+            if (!enabled) yield break;
+
             if (player == null)
             {
                 GameObject p = GameObject.FindGameObjectWithTag("Player");
@@ -268,6 +275,7 @@ public class InfinityRenderChunks : MonoBehaviour
     {
         // Let the user edit current_x/current_y in Inspector while playing to teleport instantly.
         if (!Application.isPlaying) return;
+        if (!enabled) return; // Don't run if script is disabled
         if (player == null) return;
 
         if (current_x != _runtimeChunkX || current_y != _runtimeChunkY)
@@ -519,7 +527,7 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private void Update()
     {
-        if (player == null) return;
+        if (!enabled || player == null) return;
 
         // 1. World Shift Check
         if (Mathf.Abs(player.position.x) > floatingOriginThreshold || Mathf.Abs(player.position.z) > floatingOriginThreshold)
@@ -552,6 +560,8 @@ public class InfinityRenderChunks : MonoBehaviour
     
     private void ShiftWorldOrigin()
     {
+        if (!enabled) return; // Don't shift origin if script is disabled
+        
         // Shift by whole chunks so origin stays chunk-aligned (no doubles needed).
         int dxChunks = Mathf.FloorToInt(player.position.x / chunkSize);
         int dzChunks = Mathf.FloorToInt(player.position.z / chunkSize);
@@ -576,6 +586,8 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private void UpdateChunks(long centerChunkX, long centerChunkY)
     {
+        if (!enabled) return; // Don't update chunks if script is disabled
+        
         // Build desired chunks (base + optional superchunks)
         Dictionary<string, DesiredChunk> desired = new Dictionary<string, DesiredChunk>(256);
 
@@ -702,7 +714,7 @@ public class InfinityRenderChunks : MonoBehaviour
     
     private void UpdateChunksImmediate()
     {
-        if (player == null) return;
+        if (!enabled || player == null) return;
         int localChunkX = Mathf.FloorToInt(player.position.x / chunkSize);
         int localChunkY = Mathf.FloorToInt(player.position.z / chunkSize);
         long pX = worldChunkOriginX + localChunkX;
@@ -731,7 +743,7 @@ public class InfinityRenderChunks : MonoBehaviour
     /// </summary>
     public void TeleportToChunk(long targetChunkX, long targetChunkY)
     {
-        if (player == null) return;
+        if (!enabled || player == null) return;
 
         // Reset terrain around new location
         ClearAllChunks();
@@ -794,6 +806,8 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private void CreateChunk(DesiredChunk d)
     {
+        if (!enabled) return; // Don't create chunks if script is disabled
+        
         if (terrainComputeShader == null)
         {
             Debug.LogWarning($"Cannot create chunk {d.key}: Terrain Compute Shader is not assigned!");
@@ -833,6 +847,8 @@ public class InfinityRenderChunks : MonoBehaviour
 
     private void GenerateChunkGPU(long noiseChunkX, long noiseChunkY, ChunkData data, int lodResolution, float chunkSizeWorld, int baseVertsPerChunkOverride, bool wantCollider)
     {
+        if (!enabled) return; // Don't generate chunks if script is disabled
+        
         lodResolution = ValidateLodResolution(lodResolution);
         data.isReady = false;
         data.lodResolution = lodResolution;
@@ -1141,6 +1157,8 @@ public class InfinityRenderChunks : MonoBehaviour
     // CPU Noise for Safety
     private void UpdatePlayerSafety(long playerChunkX, long playerChunkY, float inChunkX, float inChunkZ)
     {
+        if (!enabled) return; // Don't run safety checks if script is disabled
+        
         // Get actual terrain height; raycast ignores player's own colliders.
         float actualTerrainHeight;
         if (!TryGetTerrainHeightRaycast(player.position, out actualTerrainHeight))
@@ -1261,8 +1279,19 @@ public class InfinityRenderChunks : MonoBehaviour
         return Mathf.Clamp01(height01) * heightMultiplier;
     }
 
+    private void OnDisable()
+    {
+        // Stop all coroutines when script is disabled
+        if (_placePlayerCoroutine != null)
+        {
+            StopCoroutine(_placePlayerCoroutine);
+            _placePlayerCoroutine = null;
+        }
+    }
+
     private void OnDestroy()
     {
         // Cleanup is handled by UnloadChunk when chunks are destroyed
+        OnDisable(); // Ensure coroutines are stopped
     }
 }

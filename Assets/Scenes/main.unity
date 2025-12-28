@@ -341,7 +341,6 @@ GameObject:
   m_Component:
   - component: {fileID: 953848056}
   - component: {fileID: 953848055}
-  - component: {fileID: 953848057}
   m_Layer: 0
   m_Name: infinityChunks
   m_TagString: Untagged
@@ -356,12 +355,11 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 953848054}
-  m_Enabled: 0
+  m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 23cb5881119bef541bf224c9a669be60, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderChunks
-  useUnityTerrain: 1
   player: {fileID: 86797383}
   chunkSize: 200
   renderDistance: 10
@@ -417,45 +415,6 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &953848057
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 953848054}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 6f0865301e108974284ac2abaeecceb7, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderTerrain
-  player: {fileID: 86797383}
-  chunkSize: 200
-  renderDistance: 10
-  seed: 8386
-  floatingOriginThreshold: 1000
-  current_x: 3455345435
-  current_y: 94589271034
-  _debugLocalPos: {x: 0, y: 0, z: 0}
-  autoPlacePlayerOnStart: 1
-  spawnHeightOffset: 5
-  enableSafety: 1
-  safetyHeightOffset: 2
-  groundCheckDistance: 0.5
-  hardVoidY: -500
-  recoverBelowTerrain: 5
-  resolution: 257
-  heightMultiplier: 1500
-  noiseScale: 0.005
-  octaves: 6
-  persistence: 0.5
-  lacunarity: 2
-  mountainStrength: 0.4
-  plainStrength: 0.3
-  erosionStrength: 0.2
-  domainWarpStrength: 2
-  colliderRadius: 1
-  terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
 --- !u!1 &971395975
 GameObject:
   m_ObjectHideFlags: 0
