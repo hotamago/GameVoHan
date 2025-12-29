@@ -33,9 +33,9 @@ MonoBehaviour:
   rockMinSpacing: 5
   plantMinSpacing: 0.2
   grassMinSpacing: 0.09
-  attemptsPerSpawn: 10
+  attemptsPerSpawn: 5
   enableTreeClustering: 1
-  treeClusterCellSize: 120.77
+  treeClusterCellSize: 119.96
   treeClusterThreshold: 0.471
   treeClusterSharpness: 1.59
   createColliderProxies: 1

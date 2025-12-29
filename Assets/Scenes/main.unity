@@ -14,7 +14,7 @@ OcclusionCullingSettings:
 RenderSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 10
-  m_Fog: 0
+  m_Fog: 1
   m_FogColor: {r: 0.9411765, g: 0.9019608, b: 0.5490196, a: 1}
   m_FogMode: 3
   m_FogDensity: 0.005
@@ -33,11 +33,11 @@ RenderSettings:
   m_HaloTexture: {fileID: 0}
   m_SpotCookie: {fileID: 10001, guid: 0000000000000000e000000000000000, type: 0}
   m_DefaultReflectionMode: 0
-  m_DefaultReflectionResolution: 2048
+  m_DefaultReflectionResolution: 1024
   m_ReflectionBounces: 1
   m_ReflectionIntensity: 1
   m_CustomReflection: {fileID: 0}
-  m_Sun: {fileID: 0}
+  m_Sun: {fileID: 2129749444}
   m_UseRadianceAmbientProbe: 0
 --- !u!157 &3
 LightmapSettings:
@@ -570,9 +570,30 @@ MonoBehaviour:
   enableTerrainDetails: 1
   detailRenderDistance: 1
   detailOnlyMaxLod: 0
+  enableChunkVfx: 1
+  chunkParticlesPrefabs:
+  - {fileID: 4121655940318076187, guid: 18e3666b574550346837dac9842e481e, type: 3}
+  - {fileID: 6903455875079361773, guid: fd9ace03197b9794ea6fd5e418bbbd99, type: 3}
+  - {fileID: 6375836955102501150, guid: 0714e774b10e5554f986ebe42387b3c9, type: 3}
+  chunkGodRaysPrefabs:
+  - {fileID: 2076003895308449357, guid: 2f8e0aa312b32ee4fab7ba2c2845e399, type: 3}
+  vfxRenderDistance: 2
+  vfxOnlyMaxLod: 1
+  particlesPerChunk: 10
+  godRaysPerChunk: 4
+  vfxHeightOffset: 0
+  vfxHeight01Band: {x: 0.25, y: 1}
+  vfxRandomYawDegrees: 360
+  vfxUniformScaleRange: {x: 1, y: 1}
+  godRaysUseAdvancedRotation: 1
+  godRaysFixedAngles: []
+  godRaysRandomPitchRange: {x: -40, y: 40}
+  godRaysRandomRollRange: {x: -40, y: 40}
+  godRaysRandomYawRange: 360
   terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
   vegetationGenerateBudgetPerFrame: 1
   detailGenerateBudgetPerFrame: 1
+  vfxGenerateBudgetPerFrame: 2
 --- !u!1 &971395975
 GameObject:
   m_ObjectHideFlags: 0

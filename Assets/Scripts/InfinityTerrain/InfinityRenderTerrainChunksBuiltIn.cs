@@ -2,6 +2,7 @@ using System.Collections;
 using InfinityTerrain.Core;
 using InfinityTerrain.Settings;
 using InfinityTerrain.Utilities;
+using InfinityTerrain.VFX;
 using InfinityTerrain.Vegetation;
 using UnityEngine;
 
@@ -110,6 +111,40 @@ namespace InfinityTerrain
         [SerializeField] private int detailRenderDistance = 2;
         [SerializeField] private bool detailOnlyMaxLod = true;
 
+        [Header("Ambient VFX (Particles / GodRays)")]
+        [Tooltip("Spawns ambient ParticleSystem prefabs per chunk (recommended: Idyllic Fantasy Nature/Prefabs/Particles + GodRays).")]
+        [SerializeField] private bool enableChunkVfx = true;
+        [Tooltip("Array of Particle prefabs to randomly choose from when spawning. Leave empty to disable particles.")]
+        [SerializeField] private GameObject[] chunkParticlesPrefabs;
+        [Tooltip("Array of GodRays prefabs to randomly choose from when spawning. Leave empty to disable godrays.")]
+        [SerializeField] private GameObject[] chunkGodRaysPrefabs;
+        [SerializeField] private int vfxRenderDistance = 2;
+        [SerializeField] private bool vfxOnlyMaxLod = true;
+        [Tooltip("How many 'Particles' instances per chunk (base count).")]
+        [SerializeField] private int particlesPerChunk = 1;
+        [Tooltip("How many 'GodRays' instances per chunk (base count).")]
+        [SerializeField] private int godRaysPerChunk = 1;
+        [Tooltip("Density multiplier for particles (1.0 = normal, 2.0 = double, 0.5 = half).")]
+        [SerializeField] private float vfxHeightOffset = 0f;
+        [Tooltip("Spawn only when height01 is within this band (0..1). Use to avoid spawning below waterline.")]
+        [SerializeField] private Vector2 vfxHeight01Band = new Vector2(0.25f, 1f);
+        [Tooltip("Random yaw in degrees (0 disables). Applies to particles and godrays (unless advanced rotation is enabled).")]
+        [SerializeField] private float vfxRandomYawDegrees = 360f;
+        [Tooltip("Uniform scale range applied per instance.")]
+        [SerializeField] private Vector2 vfxUniformScaleRange = new Vector2(1f, 1f);
+
+        [Header("GodRays Advanced Rotation")]
+        [Tooltip("Enable advanced rotation for god rays (allows pitch/roll and fixed angles).")]
+        [SerializeField] private bool godRaysUseAdvancedRotation = false;
+        [Tooltip("Fixed rotation angles to randomly choose from (Euler: X=Pitch, Y=Yaw, Z=Roll). If empty, uses random ranges instead.")]
+        [SerializeField] private Vector3[] godRaysFixedAngles;
+        [Tooltip("Random pitch range in degrees (X=min, Y=max). 0 = no pitch rotation.")]
+        [SerializeField] private Vector2 godRaysRandomPitchRange = new Vector2(0f, 0f);
+        [Tooltip("Random roll range in degrees (X=min, Y=max). 0 = no roll rotation.")]
+        [SerializeField] private Vector2 godRaysRandomRollRange = new Vector2(0f, 0f);
+        [Tooltip("Random yaw range in degrees for god rays (0 = disabled, 360 = full rotation). Only used if fixed angles are empty.")]
+        [SerializeField] private float godRaysRandomYawRange = 360f;
+
         [Header("GPU Resources")]
         [Tooltip("REQUIRED: Assign TerrainGen.compute from Assets/Resources/Shaders/ folder directly in Inspector.")]
         [SerializeField] private ComputeShader terrainComputeShader;
@@ -137,6 +172,10 @@ namespace InfinityTerrain
 
         [Tooltip("Limits how many chunks can generate Terrain detail layers per frame (prevents big stutters). 0 disables generation.")]
         [SerializeField] private int detailGenerateBudgetPerFrame = 1;
+
+        [Header("VFX Performance")]
+        [Tooltip("Limits how many chunks can spawn VFX per frame (prevents spikes). 0 disables generation.")]
+        [SerializeField] private int vfxGenerateBudgetPerFrame = 2;
 
         private void Start()
         {
@@ -367,9 +406,82 @@ namespace InfinityTerrain
                 UpdateTerrainDetails(pX, pZ);
             }
 
+            if (enableChunkVfx)
+            {
+                UpdateChunkVfx(pX, pZ);
+            }
+
             if (enableSafety && _playerSafety != null)
             {
                 _playerSafety.UpdatePlayerSafety(pX, pZ, inChunkX, inChunkZ);
+            }
+        }
+
+        private void UpdateChunkVfx(long centerChunkX, long centerChunkY)
+        {
+            int budget = Mathf.Max(0, vfxGenerateBudgetPerFrame);
+            int generated = 0;
+
+            // Clamp user settings
+            int pCount = Mathf.Max(0, particlesPerChunk);
+            int gCount = Mathf.Max(0, godRaysPerChunk);
+            float min01 = Mathf.Clamp01(Mathf.Min(vfxHeight01Band.x, vfxHeight01Band.y));
+            float max01 = Mathf.Clamp01(Mathf.Max(vfxHeight01Band.x, vfxHeight01Band.y));
+
+            foreach (var kvp in _terrainChunkManager.LoadedChunks)
+            {
+                var d = kvp.Value;
+                if (d == null || d.gameObject == null) continue;
+                if (!d.isReady) continue;
+                if (d.isSuperChunk) continue; // keep VFX near player only
+
+                int dx = ComputeShaderHelper.ClampLongToInt(d.noiseChunkX - centerChunkX);
+                int dy = ComputeShaderHelper.ClampLongToInt(d.noiseChunkY - centerChunkY);
+                int r = Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy));
+                bool inRange = r <= Mathf.Max(0, vfxRenderDistance);
+                bool lodOk = !vfxOnlyMaxLod || d.lodResolution == _terrainSettings.resolution;
+
+                ChunkTerrainVfxScatter scatter = d.gameObject.GetComponent<ChunkTerrainVfxScatter>();
+
+                // Check if we have any valid prefabs
+                bool hasValidParticles = chunkParticlesPrefabs != null && chunkParticlesPrefabs.Length > 0 && HasAnyValidPrefab(chunkParticlesPrefabs);
+                bool hasValidGodRays = chunkGodRaysPrefabs != null && chunkGodRaysPrefabs.Length > 0 && HasAnyValidPrefab(chunkGodRaysPrefabs);
+
+                if (!inRange || !lodOk || (pCount == 0 && gCount == 0) || (!hasValidParticles && !hasValidGodRays))
+                {
+                    if (scatter != null) scatter.Clear();
+                    continue;
+                }
+
+                if (scatter == null) scatter = d.gameObject.AddComponent<ChunkTerrainVfxScatter>();
+                scatter.particlesPrefabs = chunkParticlesPrefabs;
+                scatter.godRaysPrefabs = chunkGodRaysPrefabs;
+                scatter.globalSeed = seed;
+                scatter.heightMultiplier = Mathf.Max(0.0001f, heightMultiplier);
+                scatter.yOffset = vfxHeightOffset;
+                scatter.particlesPerChunk = pCount;
+                scatter.godRaysPerChunk = gCount;
+                scatter.minHeight01 = min01;
+                scatter.maxHeight01 = max01;
+                scatter.randomYawDegrees = vfxRandomYawDegrees;
+                scatter.uniformScaleRange = vfxUniformScaleRange;
+                scatter.godRaysUseAdvancedRotation = godRaysUseAdvancedRotation;
+                scatter.godRaysFixedAngles = godRaysFixedAngles;
+                scatter.godRaysRandomPitchRange = godRaysRandomPitchRange;
+                scatter.godRaysRandomRollRange = godRaysRandomRollRange;
+                scatter.godRaysRandomYawRange = godRaysRandomYawRange;
+
+                float[,] heights01 = d.heights01;
+                if (heights01 == null || heights01.GetLength(0) != d.lodResolution)
+                {
+                    heights01 = _terrainGenerator.GenerateHeightmap01GPU(
+                        d.noiseChunkX, d.noiseChunkY, d.lodResolution, d.chunkSizeWorld, d.baseVertsPerChunk);
+                    d.heights01 = heights01;
+                }
+
+                bool allow = generated < budget;
+                bool did = scatter.EnsureGenerated(d.noiseChunkX, d.noiseChunkY, d.lodResolution, d.chunkSizeWorld, heights01, allow);
+                if (did && allow) generated++;
             }
         }
 
@@ -514,6 +626,16 @@ namespace InfinityTerrain
                 StopCoroutine(_placePlayerCoroutine);
                 _placePlayerCoroutine = null;
             }
+        }
+
+        private static bool HasAnyValidPrefab(GameObject[] prefabs)
+        {
+            if (prefabs == null || prefabs.Length == 0) return false;
+            for (int i = 0; i < prefabs.Length; i++)
+            {
+                if (prefabs[i] != null) return true;
+            }
+            return false;
         }
     }
 }
