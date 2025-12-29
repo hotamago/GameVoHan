@@ -504,8 +504,8 @@ MonoBehaviour:
   renderDistance: 4
   seed: 8386
   floatingOriginThreshold: 500
-  current_x: 3455345435
-  current_y: 94589271034
+  current_x: 3455345431
+  current_y: 94589271030
   autoPlacePlayerOnStart: 1
   spawnHeightOffset: 5
   enableSafety: 1
@@ -531,13 +531,13 @@ MonoBehaviour:
   erosionStrength: 0.2
   domainWarpStrength: 2
   enableWaterTiles: 1
-  waterMaterialOverride: {fileID: 2100000, guid: 8759ec410a6774b4ea13ae32dc2b8d2e, type: 2}
+  waterMaterialOverride: {fileID: 2100000, guid: 1eed8c0c756ddc74a9c71c5d204fd2de, type: 2}
   waterMaterialResourceName: Ocean
   waterRenderDistanceOverride: 0
   waterEnableLod: 1
-  waterTileResolution: 33
+  waterTileResolution: 65
   waterLodChunkRadii: 010000000200000004000000e7030000
-  waterLodResolutions: 21000000110000000900000005000000
+  waterLodResolutions: 41000000210000001100000009000000
   waterSurfaceY: 0
   waterUseTerrainWaterLevel: 1
   waterCastShadows: 0
@@ -913,6 +913,14 @@ PrefabInstance:
     - target: {fileID: 2696770008557388693, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 4091376553488565417, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
+      propertyPath: far clip plane
+      value: 1000
+      objectReference: {fileID: 0}
+    - target: {fileID: 4877450905648763410, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
+      propertyPath: m_RenderShadows
+      value: 1
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
