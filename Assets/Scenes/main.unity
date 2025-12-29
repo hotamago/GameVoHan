@@ -489,7 +489,7 @@ MonoBehaviour:
   waterTileResolution: 33
   waterLodChunkRadii: 010000000200000004000000e7030000
   waterLodResolutions: 21000000110000000900000005000000
-  waterSurfaceY: 40
+  waterSurfaceY: 0
   waterUseTerrainWaterLevel: 1
   waterCastShadows: 0
   waterReceiveShadows: 1

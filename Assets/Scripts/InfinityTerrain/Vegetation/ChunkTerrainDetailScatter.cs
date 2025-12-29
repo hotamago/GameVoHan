@@ -29,6 +29,7 @@ namespace InfinityTerrain.Vegetation
         private int _lastSettingsHash;
 
         private static readonly HashSet<int> _invalidDetailPrefabWarned = new HashSet<int>();
+        private static readonly HashSet<int> _usingChildDetailPrefabWarned = new HashSet<int>();
 
         public void Clear()
         {
@@ -392,6 +393,18 @@ namespace InfinityTerrain.Vegetation
             Debug.LogWarning($"[InfinityTerrain] Skipping Terrain detail prototype '{prefabRoot.name}': {reason}");
         }
 
+        private static void WarnUsingChildDetailPrefabOnce(GameObject prefabRoot, GameObject childGo)
+        {
+            if (prefabRoot == null || childGo == null) return;
+            int id = prefabRoot.GetInstanceID();
+            if (_usingChildDetailPrefabWarned.Contains(id)) return;
+            _usingChildDetailPrefabWarned.Add(id);
+            Debug.LogWarning(
+                $"[InfinityTerrain] Using child GameObject '{childGo.name}' as detail prototype for '{prefabRoot.name}' " +
+                "(root has no MeshRenderer). This may cause rendering issues. " +
+                "RECOMMENDED: Create a dedicated detail prefab with MeshRenderer+MeshFilter at the root.");
+        }
+
         private static bool TryGetValidDetailPrototype(GameObject prefabRoot, out GameObject prototypeGo, out string reason)
         {
             prototypeGo = null;
@@ -449,9 +462,7 @@ namespace InfinityTerrain.Vegetation
                 {
                     prototypeGo = go;
                     // Warn once that we're using a child renderer (not ideal for Terrain details)
-                    WarnInvalidDetailPrefabOnce(prefabRoot, 
-                        $"Using child GameObject '{go.name}' as detail mesh (root has no MeshRenderer). " +
-                        "For best results, ensure the prefab root has MeshRenderer+MeshFilter.");
+                    WarnUsingChildDetailPrefabOnce(prefabRoot, go);
                     return true;
                 }
             }
