@@ -21,10 +21,14 @@ MonoBehaviour:
   rocksPerChunk: 5
   plantsPerChunk: 20
   grassPerChunk: 100
-  plantsDensityPerM2: 0.09
+  plantsDensityPerM2: 0.12
   grassDensityPerM2: 0.52
   maxPlantsPerChunk: 2500
   maxGrassPerChunk: 6000
+  terrainDetailResolution: 256
+  terrainDetailResolutionPerPatch: 16
+  grassMaxPerCell: 4
+  plantsMaxPerCell: 2
   treeMinSpacing: 2
   rockMinSpacing: 5
   plantMinSpacing: 0.2
@@ -32,8 +36,8 @@ MonoBehaviour:
   attemptsPerSpawn: 5
   enableTreeClustering: 1
   treeClusterCellSize: 35
-  treeClusterThreshold: 0.55
-  treeClusterSharpness: 2.5
+  treeClusterThreshold: 0.7
+  treeClusterSharpness: 2.42
   createColliderProxies: 0
   autoGenerateColliderWhenMissing: 1
   prefabs:

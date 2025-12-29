@@ -35,6 +35,16 @@ namespace InfinityTerrain.Vegetation
         [Tooltip("Upper limit to prevent extreme densities from tanking FPS. Scales with chunk area like other budgets.")]
         [Min(0)] public int maxGrassPerChunk = 6000;
 
+        [Header("Terrain Detail Layers (Built-in Terrain)")]
+        [Tooltip("Detail map resolution per chunk. Higher = denser/finer, but slower to generate. Typical: 128..512.")]
+        [Range(32, 1024)] public int terrainDetailResolution = 256;
+        [Tooltip("Detail resolution per patch. Typical: 8..32.")]
+        [Range(4, 64)] public int terrainDetailResolutionPerPatch = 16;
+        [Tooltip("Max number of Grass details per cell (prevents crazy overdraw).")]
+        [Range(0, 16)] public int grassMaxPerCell = 4;
+        [Tooltip("Max number of Plant details per cell (prevents crazy overdraw).")]
+        [Range(0, 16)] public int plantsMaxPerCell = 2;
+
         [Header("Min Spacing (meters)")]
         [Min(0f)] public float treeMinSpacing = 6f;
         [Min(0f)] public float rockMinSpacing = 4f;

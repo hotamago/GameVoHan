@@ -23,6 +23,9 @@ namespace InfinityTerrain.Vegetation
         [Tooltip("Skip Grass category (usually better as detail layers).")]
         public bool excludeGrass = true;
 
+        [Tooltip("Skip Plant category (usually better as detail layers).")]
+        public bool excludePlants = false;
+
         private long _lastChunkX;
         private long _lastChunkY;
         private int _lastLodResolution;
@@ -60,7 +63,7 @@ namespace InfinityTerrain.Vegetation
             if (terrain == null || terrain.terrainData == null) return false;
 
             int seed = CombineSeed(globalSeed, settings.seedOffset, chunkX, chunkY);
-            int settingsHash = ComputeSettingsHash(settings, includeNonTreesAsTrees, excludeGrass);
+            int settingsHash = ComputeSettingsHash(settings, includeNonTreesAsTrees, excludeGrass, excludePlants);
 
             bool same =
                 _lastChunkX == chunkX &&
@@ -96,6 +99,7 @@ namespace InfinityTerrain.Vegetation
                 settings,
                 includeNonTreesAsTrees,
                 excludeGrass,
+                excludePlants,
                 out List<VegetationPrefabEntry> treeEntries,
                 out List<VegetationPrefabEntry> rockEntries,
                 out List<VegetationPrefabEntry> plantEntries,
@@ -361,6 +365,7 @@ namespace InfinityTerrain.Vegetation
             VegetationScatterSettings settings,
             bool includeNonTreesAsTrees,
             bool excludeGrass,
+            bool excludePlants,
             out List<VegetationPrefabEntry> trees,
             out List<VegetationPrefabEntry> rocks,
             out List<VegetationPrefabEntry> plants,
@@ -380,6 +385,7 @@ namespace InfinityTerrain.Vegetation
 
                 if (!includeNonTreesAsTrees && e.category != VegetationCategory.Tree) continue;
                 if (excludeGrass && e.category == VegetationCategory.Grass) continue;
+                if (excludePlants && e.category == VegetationCategory.Plant) continue;
 
                 switch (e.category)
                 {
@@ -719,6 +725,16 @@ namespace InfinityTerrain.Vegetation
                 h = (h * 31) ^ (s != null ? s.GetInstanceID() : 0);
                 h = (h * 31) ^ includeNonTrees.GetHashCode();
                 h = (h * 31) ^ excludeGrass.GetHashCode();
+                return h;
+            }
+        }
+
+        private static int ComputeSettingsHash(VegetationScatterSettings s, bool includeNonTrees, bool excludeGrass, bool excludePlants)
+        {
+            unchecked
+            {
+                int h = ComputeSettingsHash(s, includeNonTrees, excludeGrass);
+                h = (h * 31) ^ excludePlants.GetHashCode();
                 return h;
             }
         }
