@@ -21,8 +21,8 @@ MonoBehaviour:
   rocksPerChunk: 20
   plantsPerChunk: 0
   grassPerChunk: 0
-  plantsDensityPerM2: 0.02
-  grassDensityPerM2: 0.1
+  plantsDensityPerM2: 0.005
+  grassDensityPerM2: 0.2
   terrainDetailsUseCoverageMode: 0
   terrainDetailResolution: 128
   terrainDetailResolutionPerPatch: 16
