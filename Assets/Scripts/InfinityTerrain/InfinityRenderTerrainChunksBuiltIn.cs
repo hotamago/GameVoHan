@@ -86,6 +86,16 @@ namespace InfinityTerrain
         [Tooltip("Optional override for the default TerrainLayer diffuse texture.")]
         [SerializeField] private Texture2D defaultTerrainDiffuse;
 
+        [Header("Built-in Terrain Texturing (Auto Splatmap)")]
+        [Tooltip("Optional. If set, these TerrainLayers are used instead of 'Default Terrain Layer'. Recommended order: 0=Beach, 1=Grass, 2=Rock, 3=Snow.")]
+        [SerializeField] private TerrainLayer[] terrainLayersOverride;
+        [SerializeField] private bool enableAutoSplatmap = true;
+        [SerializeField] private int splatmapResolution = 128;
+        [SerializeField] private float slopeRockStartDeg = 30f;
+        [SerializeField] private float slopeRockEndDeg = 45f;
+        [SerializeField] private float blendNoiseCellSize = 25f;
+        [SerializeField] private float blendNoiseStrength = 0.12f;
+
         [Header("Vegetation (Terrain Trees)")]
         [SerializeField] private bool enableTerrainTrees = true;
         [SerializeField] private VegetationScatterSettings vegetationScatterSettings;
@@ -244,6 +254,7 @@ namespace InfinityTerrain
 
             _terrainChunkManager = new TerrainChunkManagerBuiltIn(
                 _terrainSettings,
+                _materialSettings,
                 _terrainGenerator,
                 _worldOriginManager,
                 transform,
@@ -253,7 +264,14 @@ namespace InfinityTerrain
                 groupingID: terrainGroupingID,
                 terrainLayer: Mathf.Max(0, LayerMask.NameToLayer("Default")),
                 defaultTerrainLayer: defaultTerrainLayer,
-                terrainMaterialTemplate: terrainMat);
+                terrainLayersOverride: terrainLayersOverride,
+                terrainMaterialTemplate: terrainMat,
+                enableAutoSplatmap: enableAutoSplatmap,
+                splatmapResolution: splatmapResolution,
+                slopeRockStartDeg: slopeRockStartDeg,
+                slopeRockEndDeg: slopeRockEndDeg,
+                blendNoiseCellSize: blendNoiseCellSize,
+                blendNoiseStrength: blendNoiseStrength);
 
             _waterManager = new WaterManager(_waterSettings, _terrainSettings, _materialSettings, _worldOriginManager, transform);
             _waterManager.EnsureWaterMaterialLoaded();

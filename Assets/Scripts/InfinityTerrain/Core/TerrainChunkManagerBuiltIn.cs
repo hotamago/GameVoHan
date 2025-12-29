@@ -13,6 +13,7 @@ namespace InfinityTerrain.Core
     public class TerrainChunkManagerBuiltIn
     {
         private readonly TerrainSettings _terrainSettings;
+        private readonly MaterialSettings _materialSettings;
         private readonly TerrainGenerator _terrainGenerator;
         private readonly WorldOriginManager _worldOriginManager;
         private readonly Transform _parentTransform;
@@ -30,10 +31,20 @@ namespace InfinityTerrain.Core
         private readonly int _groupingID;
         private readonly int _terrainLayer;
         private readonly TerrainLayer _defaultTerrainLayer;
+        private readonly TerrainLayer[] _terrainLayersOverride;
         private readonly Material _terrainMaterialTemplate;
+
+        // Runtime splat (alphamap) generation
+        private readonly bool _enableAutoSplatmap;
+        private readonly int _splatmapResolution;
+        private readonly float _slopeRockStartDeg;
+        private readonly float _slopeRockEndDeg;
+        private readonly float _blendNoiseCellSize;
+        private readonly float _blendNoiseStrength;
 
         public TerrainChunkManagerBuiltIn(
             TerrainSettings terrainSettings,
+            MaterialSettings materialSettings,
             TerrainGenerator terrainGenerator,
             WorldOriginManager worldOriginManager,
             Transform parentTransform,
@@ -43,9 +54,17 @@ namespace InfinityTerrain.Core
             int groupingID = 0,
             int terrainLayer = 0,
             TerrainLayer defaultTerrainLayer = null,
-            Material terrainMaterialTemplate = null)
+            TerrainLayer[] terrainLayersOverride = null,
+            Material terrainMaterialTemplate = null,
+            bool enableAutoSplatmap = false,
+            int splatmapResolution = 128,
+            float slopeRockStartDeg = 30f,
+            float slopeRockEndDeg = 45f,
+            float blendNoiseCellSize = 25f,
+            float blendNoiseStrength = 0.12f)
         {
             _terrainSettings = terrainSettings;
+            _materialSettings = materialSettings;
             _terrainGenerator = terrainGenerator;
             _worldOriginManager = worldOriginManager;
             _parentTransform = parentTransform;
@@ -55,7 +74,16 @@ namespace InfinityTerrain.Core
             _groupingID = groupingID;
             _terrainLayer = terrainLayer;
             _defaultTerrainLayer = defaultTerrainLayer;
+            _terrainLayersOverride = terrainLayersOverride;
             _terrainMaterialTemplate = terrainMaterialTemplate;
+
+            _enableAutoSplatmap = enableAutoSplatmap;
+            _splatmapResolution = Mathf.Clamp(splatmapResolution, 16, 1024);
+            _slopeRockStartDeg = Mathf.Clamp(slopeRockStartDeg, 0f, 89f);
+            _slopeRockEndDeg = Mathf.Clamp(slopeRockEndDeg, 0f, 89f);
+            if (_slopeRockEndDeg < _slopeRockStartDeg) _slopeRockEndDeg = _slopeRockStartDeg;
+            _blendNoiseCellSize = Mathf.Max(1f, blendNoiseCellSize);
+            _blendNoiseStrength = Mathf.Clamp01(blendNoiseStrength);
         }
 
         public void UpdateChunks(long centerChunkX, long centerChunkY)
@@ -255,6 +283,14 @@ namespace InfinityTerrain.Core
             terrain.basemapDistance = _basemapDistance;
             terrain.groupingID = _groupingID;
             terrain.allowAutoConnect = false; // We are chunk streaming manually
+            terrain.drawTreesAndFoliage = true;
+
+            // Ensure runtime-created terrains actually render trees/details at reasonable distances.
+            // Defaults can be surprisingly low depending on project settings / pipeline.
+            terrain.treeDistance = Mathf.Max(terrain.treeDistance, _terrainSettings.chunkSize * 6f);
+            terrain.treeBillboardDistance = Mathf.Max(terrain.treeBillboardDistance, _terrainSettings.chunkSize * 3f);
+            terrain.detailObjectDistance = Mathf.Max(terrain.detailObjectDistance, _terrainSettings.chunkSize * 4f);
+            terrain.detailObjectDensity = Mathf.Max(terrain.detailObjectDensity, 0.75f);
 
             // URP/HDRP: providing a custom material template avoids "invisible/transparent" terrain when created at runtime.
             if (_terrainMaterialTemplate != null)
@@ -268,6 +304,13 @@ namespace InfinityTerrain.Core
             if (td == null) return;
             // URP terrain requires TerrainLayers to render properly; runtime TerrainData has none by default.
             if (td.terrainLayers != null && td.terrainLayers.Length > 0) return;
+
+            if (_terrainLayersOverride != null && _terrainLayersOverride.Length > 0)
+            {
+                td.terrainLayers = _terrainLayersOverride;
+                return;
+            }
+
             if (_defaultTerrainLayer == null) return;
             td.terrainLayers = new[] { _defaultTerrainLayer };
         }
@@ -306,6 +349,12 @@ namespace InfinityTerrain.Core
             // NOTE: Some Unity versions support SetHeightsDelayLOD, but ApplyDelayedHeightmapModification
             // is not available everywhere. Use SetHeights for maximum compatibility.
             td.SetHeights(0, 0, heights01);
+
+            // Optional runtime texture splatmap based on height/slope/noise (multiple TerrainLayers needed).
+            if (_enableAutoSplatmap && td.terrainLayers != null && td.terrainLayers.Length >= 2 && _materialSettings != null)
+            {
+                ApplyAutoSplatmap(td, heights01, d.noiseChunkX, d.noiseChunkY, d.chunkSizeWorld);
+            }
 
             terrain.terrainData = td;
             tc.terrainData = td;
@@ -382,6 +431,142 @@ namespace InfinityTerrain.Core
                 _poolByResolution[res] = stack;
             }
             stack.Push(data);
+        }
+
+        private void ApplyAutoSplatmap(TerrainData td, float[,] heights01, long chunkX, long chunkY, float chunkSizeWorld)
+        {
+            int layers = td.terrainLayers.Length;
+            int res = _splatmapResolution;
+            td.alphamapResolution = res;
+
+            float[,,] alpha = new float[res, res, layers];
+
+            int hmRes = heights01.GetLength(0);
+            float invHm = 1f / Mathf.Max(1, hmRes - 1);
+
+            float water = _materialSettings.waterLevel;
+            float beach = _materialSettings.beachLevel;
+            float grass = _materialSettings.grassLevel;
+            float rock = _materialSettings.rockLevel;
+            float snow = _materialSettings.snowLevel;
+
+            float slopeStart = _slopeRockStartDeg;
+            float slopeEnd = Mathf.Max(slopeStart + 0.001f, _slopeRockEndDeg);
+
+            for (int y = 0; y < res; y++)
+            {
+                float v = (res <= 1) ? 0f : (float)y / (res - 1);
+                for (int x = 0; x < res; x++)
+                {
+                    float u = (res <= 1) ? 0f : (float)x / (res - 1);
+
+                    // Sample height from heightmap
+                    float h01 = SampleHeight01Bilinear(heights01, u, v);
+
+                    // Approximate slope in degrees from heightmap neighborhood
+                    float slopeDeg = SampleSlopeDeg(heights01, u, v, _terrainSettings.heightMultiplier, _terrainSettings.chunkSize);
+
+                    // Blend noise (stable across infinity)
+                    double wx = (chunkX * (double)chunkSizeWorld) + (u * (double)chunkSizeWorld);
+                    double wz = (chunkY * (double)chunkSizeWorld) + (v * (double)chunkSizeWorld);
+                    float n = InfinityTerrain.Vegetation.VegetationNoise.ValueNoise2D(wx, wz, _blendNoiseCellSize, _terrainSettings.seed ^ 0x3a12f9d);
+                    float hn = Mathf.Clamp01(h01 + (n - 0.5f) * _blendNoiseStrength);
+
+                    float beachW = SmoothBand(hn, water, beach);
+                    float grassW = SmoothBand(hn, beach, grass);
+                    float rockW = SmoothBand(hn, grass, rock);
+                    float snowW = SmoothStep01(hn, rock, snow);
+
+                    // Force rock on steep slopes
+                    float slope01 = Mathf.InverseLerp(slopeStart, slopeEnd, slopeDeg);
+                    slope01 = Mathf.Clamp01(slope01);
+                    rockW = Mathf.Max(rockW, slope01);
+
+                    // Normalize the 4-core weights then map to N layers:
+                    // Layer 0..3 = beach/grass/rock/snow by convention; extra layers get 0.
+                    float sum = beachW + grassW + rockW + snowW;
+                    if (sum <= 1e-6f) sum = 1f;
+                    beachW /= sum;
+                    grassW /= sum;
+                    rockW /= sum;
+                    snowW /= sum;
+
+                    for (int l = 0; l < layers; l++)
+                    {
+                        float w = 0f;
+                        if (l == 0) w = beachW;
+                        else if (l == 1) w = grassW;
+                        else if (l == 2) w = rockW;
+                        else if (l == 3) w = snowW;
+                        alpha[y, x, l] = w;
+                    }
+                }
+            }
+
+            td.SetAlphamaps(0, 0, alpha);
+        }
+
+        private static float SampleHeight01Bilinear(float[,] h, float u, float v)
+        {
+            int res = h.GetLength(0);
+            if (res <= 1) return Mathf.Clamp01(h[0, 0]);
+
+            float fx = Mathf.Clamp(u * (res - 1), 0f, res - 1.001f);
+            float fz = Mathf.Clamp(v * (res - 1), 0f, res - 1.001f);
+
+            int x0 = Mathf.FloorToInt(fx);
+            int z0 = Mathf.FloorToInt(fz);
+            int x1 = Mathf.Min(res - 1, x0 + 1);
+            int z1 = Mathf.Min(res - 1, z0 + 1);
+
+            float tx = fx - x0;
+            float tz = fz - z0;
+
+            float a = h[z0, x0];
+            float b = h[z0, x1];
+            float c = h[z1, x0];
+            float d = h[z1, x1];
+
+            return Mathf.Clamp01(Mathf.Lerp(Mathf.Lerp(a, b, tx), Mathf.Lerp(c, d, tx), tz));
+        }
+
+        private static float SampleSlopeDeg(float[,] h, float u, float v, float heightMultiplier, float chunkSizeWorld)
+        {
+            int res = h.GetLength(0);
+            if (res <= 2) return 0f;
+
+            float fx = u * (res - 1);
+            float fz = v * (res - 1);
+            int ix = Mathf.Clamp(Mathf.RoundToInt(fx), 1, res - 2);
+            int iz = Mathf.Clamp(Mathf.RoundToInt(fz), 1, res - 2);
+
+            float step = chunkSizeWorld / Mathf.Max(1, res - 1);
+
+            float hL = h[iz, ix - 1] * heightMultiplier;
+            float hR = h[iz, ix + 1] * heightMultiplier;
+            float hD = h[iz - 1, ix] * heightMultiplier;
+            float hU = h[iz + 1, ix] * heightMultiplier;
+
+            float dx = (hR - hL) / (2f * Mathf.Max(0.0001f, step));
+            float dz = (hU - hD) / (2f * Mathf.Max(0.0001f, step));
+
+            Vector3 n = Vector3.Normalize(new Vector3(-dx, 1f, -dz));
+            return Vector3.Angle(n, Vector3.up);
+        }
+
+        private static float SmoothStep01(float x, float a, float b)
+        {
+            if (Mathf.Abs(a - b) < 1e-6f) return x >= b ? 1f : 0f;
+            float t = Mathf.InverseLerp(a, b, x);
+            return t * t * (3f - 2f * t);
+        }
+
+        private static float SmoothBand(float x, float a, float b)
+        {
+            // Weight is high between a..b with soft edges.
+            float up = SmoothStep01(x, a, b);
+            float down = 1f - SmoothStep01(x, b, b + 0.08f);
+            return Mathf.Clamp01(up * down);
         }
     }
 }

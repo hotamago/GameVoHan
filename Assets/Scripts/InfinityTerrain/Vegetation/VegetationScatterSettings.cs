@@ -23,6 +23,12 @@ namespace InfinityTerrain.Vegetation
         [Min(0)] public int plantsPerChunk = 30;
         [Min(0)] public int grassPerChunk = 60;
 
+        [Header("Density (optional, per m²)")]
+        [Tooltip("If > 0, Plants will be spawned using a probability/density approach instead of a fixed per-chunk count.")]
+        [Min(0f)] public float plantsDensityPerM2 = 0f;
+        [Tooltip("If > 0, Grass will be spawned using a probability/density approach instead of a fixed per-chunk count.")]
+        [Min(0f)] public float grassDensityPerM2 = 0f;
+
         [Header("Min Spacing (meters)")]
         [Min(0f)] public float treeMinSpacing = 6f;
         [Min(0f)] public float rockMinSpacing = 4f;
@@ -32,6 +38,22 @@ namespace InfinityTerrain.Vegetation
         [Header("Placement Quality")]
         [Tooltip("Higher = more retries to satisfy spacing/filters. Cost increases linearly.")]
         [Min(1)] public int attemptsPerSpawn = 10;
+
+        [Header("Clustering (Trees)")]
+        [Tooltip("If enabled, the same tree species will tend to appear in patches (more natural).")]
+        public bool enableTreeClustering = true;
+        [Tooltip("World-space cell size (meters) for tree clustering noise. Larger => bigger patches.")]
+        [Min(1f)] public float treeClusterCellSize = 35f;
+        [Tooltip("Higher => fewer places where a tree species is allowed to spawn.")]
+        [Range(0f, 1f)] public float treeClusterThreshold = 0.55f;
+        [Tooltip("Higher => sharper patch edges.")]
+        [Range(0.25f, 8f)] public float treeClusterSharpness = 2.5f;
+
+        [Header("Colliders (Trees/Rocks)")]
+        [Tooltip("Create lightweight collider proxy GameObjects for Trees/Rocks so they have physics even when rendered via Terrain trees / GPU instancing.")]
+        public bool createColliderProxies = true;
+        [Tooltip("If a prefab has no colliders, generate a simple Box/Capsule collider proxy from renderer bounds.")]
+        public bool autoGenerateColliderWhenMissing = true;
 
         [Header("Prefab Entries")]
         public List<VegetationPrefabEntry> prefabs = new List<VegetationPrefabEntry>();

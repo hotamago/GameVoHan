@@ -28,6 +28,16 @@ namespace InfinityTerrain.Vegetation
         private int _lastLodResolution;
         private int _lastSeed;
         private int _lastSettingsHash;
+        private Transform _colliderContainer;
+
+        private struct CachedBounds
+        {
+            public bool valid;
+            public Bounds boundsLocal; // In prefab root local space
+            public bool capsulePreferred;
+        }
+
+        private static readonly Dictionary<GameObject, CachedBounds> _boundsCache = new Dictionary<GameObject, CachedBounds>();
 
         public void Clear()
         {
@@ -36,6 +46,7 @@ namespace InfinityTerrain.Vegetation
             t.terrainData.treeInstances = Array.Empty<TreeInstance>();
             // Keep prototypes (optional); but clearing instances is enough.
             t.Flush();
+            ClearColliderProxies();
             _lastSeed = 0;
         }
 
@@ -80,15 +91,29 @@ namespace InfinityTerrain.Vegetation
             TerrainData td = terrain.terrainData;
             if (td == null) return;
 
-            // Build prototypes list
-            List<VegetationPrefabEntry> entries = CollectEntries(settings, includeNonTreesAsTrees, excludeGrass);
-            if (entries.Count == 0)
+            // Split by category for correct budgets + better control.
+            CollectEntriesByCategory(
+                settings,
+                includeNonTreesAsTrees,
+                excludeGrass,
+                out List<VegetationPrefabEntry> treeEntries,
+                out List<VegetationPrefabEntry> rockEntries,
+                out List<VegetationPrefabEntry> plantEntries,
+                out List<VegetationPrefabEntry> grassEntries);
+
+            List<VegetationPrefabEntry> allForPrototypes = new List<VegetationPrefabEntry>(treeEntries.Count + rockEntries.Count + plantEntries.Count + grassEntries.Count);
+            allForPrototypes.AddRange(treeEntries);
+            allForPrototypes.AddRange(rockEntries);
+            allForPrototypes.AddRange(plantEntries);
+            allForPrototypes.AddRange(grassEntries);
+
+            if (allForPrototypes.Count == 0)
             {
                 Clear();
                 return;
             }
 
-            TreePrototype[] prototypes = BuildTreePrototypes(entries);
+            TreePrototype[] prototypes = BuildTreePrototypes(allForPrototypes);
             if (prototypes == null || prototypes.Length == 0)
             {
                 Clear();
@@ -112,53 +137,101 @@ namespace InfinityTerrain.Vegetation
                 return;
             }
 
-            // Use category-aware min spacing
-            // NOTE: Terrain trees only support Y-rotation (no align-to-normal).
             System.Random rng = new System.Random(seed);
-            List<Vector2> placedXZ = new List<Vector2>(totalTarget);
+            List<Vector2> placedXZ = new List<Vector2>(Mathf.Max(64, totalTarget));
             List<TreeInstance> instances = new List<TreeInstance>(totalTarget);
 
-            int attempts = Mathf.Max(totalTarget * settings.attemptsPerSpawn, totalTarget);
             int res = heights01.GetLength(0);
             float step = (res > 1) ? (chunkSizeWorld / (res - 1)) : chunkSizeWorld;
             float invChunk = 1.0f / Mathf.Max(0.0001f, chunkSizeWorld);
-            float invHm = 1.0f / Mathf.Max(0.0001f, heightMultiplier);
+            EnsureColliderContainer();
+            ClearColliderProxies();
 
-            for (int a = 0; a < attempts && instances.Count < totalTarget; a++)
+            // Spawn per category (fixes "plants/grass not showing" caused by mixed weighted picking).
+            SpawnFixedCountCategory(
+                terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
+                treeEntries, targetTrees, settings.treeMinSpacing, placedXZ, instances, enableClustering: true);
+
+            SpawnFixedCountCategory(
+                terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
+                rockEntries, targetRocks, settings.rockMinSpacing, placedXZ, instances, enableClustering: false);
+
+            // Plants: prefer density/probability if configured
+            if (includeNonTreesAsTrees && plantEntries.Count > 0)
             {
+                if (settings.plantsDensityPerM2 > 0f)
+                {
+                    SpawnDensityCategory(
+                        terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
+                        plantEntries, settings.plantsDensityPerM2, settings.plantMinSpacing, placedXZ, instances, enableClustering: false);
+                }
+                else
+                {
+                    SpawnFixedCountCategory(
+                        terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
+                        plantEntries, targetPlants, settings.plantMinSpacing, placedXZ, instances, enableClustering: false);
+                }
+            }
+
+            // Grass: prefer density/probability if configured
+            if (!excludeGrass && includeNonTreesAsTrees && grassEntries.Count > 0)
+            {
+                if (settings.grassDensityPerM2 > 0f)
+                {
+                    SpawnDensityCategory(
+                        terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
+                        grassEntries, settings.grassDensityPerM2, settings.grassMinSpacing, placedXZ, instances, enableClustering: false);
+                }
+                else
+                {
+                    SpawnFixedCountCategory(
+                        terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
+                        grassEntries, targetGrassAsTrees, settings.grassMinSpacing, placedXZ, instances, enableClustering: false);
+                }
+            }
+
+            td.treeInstances = instances.ToArray();
+            terrain.Flush();
+        }
+
+        private void SpawnFixedCountCategory(
+            Terrain terrain,
+            TerrainData td,
+            System.Random rng,
+            float chunkSizeWorld,
+            float[,] heights01,
+            float step,
+            float invChunk,
+            List<VegetationPrefabEntry> entries,
+            int targetCount,
+            float minSpacing,
+            List<Vector2> placedXZ,
+            List<TreeInstance> instances,
+            bool enableClustering)
+        {
+            if (settings == null) return;
+            if (entries == null || entries.Count == 0) return;
+            if (targetCount <= 0) return;
+
+            int attempts = Mathf.Max(targetCount * settings.attemptsPerSpawn, targetCount);
+            float minSq = Mathf.Max(0f, minSpacing) * Mathf.Max(0f, minSpacing);
+            int spawned = 0;
+
+            for (int a = 0; a < attempts && (instances.Count < int.MaxValue); a++)
+            {
+                if (spawned >= targetCount) break;
+
                 float x = (float)rng.NextDouble() * chunkSizeWorld;
                 float z = (float)rng.NextDouble() * chunkSizeWorld;
 
-                float h01 = SampleHeight01Bilinear(heights01, x, z, step);
-                float hWorld = h01 * heightMultiplier;
+                if (!PassPlacementFilters(heights01, x, z, step, out float h01)) continue;
 
-                // Height filter
-                if (h01 < settings.minHeight01 || h01 > settings.maxHeight01) continue;
+                if (minSq > 0f && !PassSpacing(placedXZ, x, z, minSq)) continue;
 
-                // Water exclusion
-                if (hWorld < (waterSurfaceY + settings.waterExclusionYOffset)) continue;
-
-                // Slope filter (approx from heightmap)
-                float slopeDeg = SampleSlopeDeg(heights01, x, z, step, heightMultiplier);
-                if (slopeDeg > settings.maxSlopeDeg) continue;
-
-                // Pick prefab weighted (category-aware)
-                VegetationPrefabEntry entry = PickWeighted(rng, entries);
+                VegetationPrefabEntry entry = enableClustering
+                    ? PickWeightedClustered(rng, entries, terrain, x, z)
+                    : PickWeighted(rng, entries);
                 if (entry.prefab == null) continue;
-
-                float minSpacing = GetMinSpacingForCategory(entry.category);
-                if (minSpacing > 0f)
-                {
-                    float minSq = minSpacing * minSpacing;
-                    bool ok = true;
-                    Vector2 p = new Vector2(x, z);
-                    for (int i = 0; i < placedXZ.Count; i++)
-                    {
-                        Vector2 d = placedXZ[i] - p;
-                        if (d.sqrMagnitude < minSq) { ok = false; break; }
-                    }
-                    if (!ok) continue;
-                }
 
                 int protoIndex = FindPrototypeIndex(td.treePrototypes, entry.prefab);
                 if (protoIndex < 0) continue;
@@ -182,41 +255,349 @@ namespace InfinityTerrain.Vegetation
 
                 instances.Add(ti);
                 placedXZ.Add(new Vector2(x, z));
-            }
+                spawned++;
 
-            td.treeInstances = instances.ToArray();
-            terrain.Flush();
+                MaybeCreateColliderProxy(entry, terrain.transform.position + new Vector3(x, h01 * heightMultiplier, z), yawDeg, scale);
+            }
         }
 
-        private float GetMinSpacingForCategory(VegetationCategory cat)
+        private void SpawnDensityCategory(
+            Terrain terrain,
+            TerrainData td,
+            System.Random rng,
+            float chunkSizeWorld,
+            float[,] heights01,
+            float step,
+            float invChunk,
+            List<VegetationPrefabEntry> entries,
+            float densityPerM2,
+            float minSpacing,
+            List<Vector2> placedXZ,
+            List<TreeInstance> instances,
+            bool enableClustering)
         {
-            if (settings == null) return 0f;
-            switch (cat)
+            if (settings == null) return;
+            if (entries == null || entries.Count == 0) return;
+            if (densityPerM2 <= 0f) return;
+
+            float cell = Mathf.Max(0.25f, Mathf.Max(0f, minSpacing));
+            float cellArea = cell * cell;
+            float p = Mathf.Clamp01(densityPerM2 * cellArea);
+            if (p <= 0f) return;
+
+            int cellsX = Mathf.Max(1, Mathf.CeilToInt(chunkSizeWorld / cell));
+            int cellsZ = Mathf.Max(1, Mathf.CeilToInt(chunkSizeWorld / cell));
+            float minSq = Mathf.Max(0f, minSpacing) * Mathf.Max(0f, minSpacing);
+
+            for (int iz = 0; iz < cellsZ; iz++)
             {
-                case VegetationCategory.Tree: return settings.treeMinSpacing;
-                case VegetationCategory.Rock: return settings.rockMinSpacing;
-                case VegetationCategory.Plant: return settings.plantMinSpacing;
-                case VegetationCategory.Grass: return settings.grassMinSpacing;
-                default: return settings.plantMinSpacing;
+                for (int ix = 0; ix < cellsX; ix++)
+                {
+                    if (rng.NextDouble() > p) continue;
+
+                    // Jitter inside cell
+                    float x = (ix + (float)rng.NextDouble()) * cell;
+                    float z = (iz + (float)rng.NextDouble()) * cell;
+                    if (x < 0f || z < 0f || x > chunkSizeWorld || z > chunkSizeWorld) continue;
+
+                    if (!PassPlacementFilters(heights01, x, z, step, out float h01)) continue;
+                    if (minSq > 0f && !PassSpacing(placedXZ, x, z, minSq)) continue;
+
+                    VegetationPrefabEntry entry = enableClustering
+                        ? PickWeightedClustered(rng, entries, terrain, x, z)
+                        : PickWeighted(rng, entries);
+                    if (entry.prefab == null) continue;
+
+                    int protoIndex = FindPrototypeIndex(td.treePrototypes, entry.prefab);
+                    if (protoIndex < 0) continue;
+
+                    float scale = RandomRange(rng, entry.minUniformScale, entry.maxUniformScale);
+                    if (scale <= 0f) scale = 1f;
+
+                    float yawDeg = entry.randomYaw ? (float)(rng.NextDouble() * 360.0) : 0f;
+                    float yawRad = yawDeg * Mathf.Deg2Rad;
+
+                    TreeInstance ti = new TreeInstance
+                    {
+                        prototypeIndex = protoIndex,
+                        position = new Vector3(x * invChunk, h01, z * invChunk),
+                        widthScale = scale,
+                        heightScale = scale,
+                        rotation = yawRad,
+                        color = Color.white,
+                        lightmapColor = Color.white
+                    };
+
+                    instances.Add(ti);
+                    placedXZ.Add(new Vector2(x, z));
+                    MaybeCreateColliderProxy(entry, terrain.transform.position + new Vector3(x, h01 * heightMultiplier, z), yawDeg, scale);
+                }
             }
         }
 
-        private static List<VegetationPrefabEntry> CollectEntries(VegetationScatterSettings settings, bool includeNonTreesAsTrees, bool excludeGrass)
+        private bool PassPlacementFilters(float[,] heights01, float x, float z, float step, out float h01)
         {
-            var list = new List<VegetationPrefabEntry>();
-            if (settings == null || settings.prefabs == null) return list;
+            h01 = SampleHeight01Bilinear(heights01, x, z, step);
+            float hWorld = h01 * heightMultiplier;
+
+            // Height filter
+            if (h01 < settings.minHeight01 || h01 > settings.maxHeight01) return false;
+
+            // Water exclusion
+            if (hWorld < (waterSurfaceY + settings.waterExclusionYOffset)) return false;
+
+            // Slope filter (approx from heightmap)
+            float slopeDeg = SampleSlopeDeg(heights01, x, z, step, heightMultiplier);
+            if (slopeDeg > settings.maxSlopeDeg) return false;
+
+            return true;
+        }
+
+        private static bool PassSpacing(List<Vector2> placedXZ, float x, float z, float minSq)
+        {
+            if (placedXZ == null) return true;
+            Vector2 p = new Vector2(x, z);
+            for (int i = 0; i < placedXZ.Count; i++)
+            {
+                Vector2 d = placedXZ[i] - p;
+                if (d.sqrMagnitude < minSq) return false;
+            }
+            return true;
+        }
+
+        private static void CollectEntriesByCategory(
+            VegetationScatterSettings settings,
+            bool includeNonTreesAsTrees,
+            bool excludeGrass,
+            out List<VegetationPrefabEntry> trees,
+            out List<VegetationPrefabEntry> rocks,
+            out List<VegetationPrefabEntry> plants,
+            out List<VegetationPrefabEntry> grass)
+        {
+            trees = new List<VegetationPrefabEntry>();
+            rocks = new List<VegetationPrefabEntry>();
+            plants = new List<VegetationPrefabEntry>();
+            grass = new List<VegetationPrefabEntry>();
+
+            if (settings == null || settings.prefabs == null) return;
 
             for (int i = 0; i < settings.prefabs.Count; i++)
             {
                 var e = settings.prefabs[i];
                 if (e.prefab == null || e.weight <= 0f) continue;
 
-                if (excludeGrass && e.category == VegetationCategory.Grass) continue;
                 if (!includeNonTreesAsTrees && e.category != VegetationCategory.Tree) continue;
+                if (excludeGrass && e.category == VegetationCategory.Grass) continue;
 
-                list.Add(e);
+                switch (e.category)
+                {
+                    case VegetationCategory.Tree: trees.Add(e); break;
+                    case VegetationCategory.Rock: rocks.Add(e); break;
+                    case VegetationCategory.Plant: plants.Add(e); break;
+                    case VegetationCategory.Grass: grass.Add(e); break;
+                    default: plants.Add(e); break;
+                }
             }
-            return list;
+        }
+
+        private VegetationPrefabEntry PickWeightedClustered(System.Random rng, List<VegetationPrefabEntry> entries, Terrain terrain, float localX, float localZ)
+        {
+            if (settings == null || !settings.enableTreeClustering || settings.treeClusterCellSize <= 0.01f)
+            {
+                return PickWeighted(rng, entries);
+            }
+
+            // Compute stable "patch noise" per entry at this world position.
+            Vector3 chunkOrigin = (terrain != null) ? terrain.transform.position : Vector3.zero;
+            double wx = chunkOrigin.x + localX;
+            double wz = chunkOrigin.z + localZ;
+
+            float total = 0f;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                float w = Mathf.Max(0f, entries[i].weight);
+                if (w <= 0f) continue;
+                float patch = VegetationNoise.PatchFactor(wx, wz, entries[i].prefab, globalSeed, settings);
+                total += w * patch;
+            }
+            if (total <= 0f) return PickWeighted(rng, entries);
+
+            float r = (float)rng.NextDouble() * total;
+            float acc = 0f;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                float w = Mathf.Max(0f, entries[i].weight);
+                if (w <= 0f) continue;
+                float patch = VegetationNoise.PatchFactor(wx, wz, entries[i].prefab, globalSeed, settings);
+                acc += w * patch;
+                if (r <= acc) return entries[i];
+            }
+            return entries[entries.Count - 1];
+        }
+
+        private void EnsureColliderContainer()
+        {
+            if (_colliderContainer != null) return;
+            Transform t = transform.Find("__VegetationColliders");
+            if (t != null) { _colliderContainer = t; return; }
+            GameObject go = new GameObject("__VegetationColliders");
+            go.transform.SetParent(transform, worldPositionStays: false);
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one;
+            _colliderContainer = go.transform;
+        }
+
+        private void ClearColliderProxies()
+        {
+            if (_colliderContainer == null) return;
+            for (int i = _colliderContainer.childCount - 1; i >= 0; i--)
+            {
+                Destroy(_colliderContainer.GetChild(i).gameObject);
+            }
+        }
+
+        private void MaybeCreateColliderProxy(VegetationPrefabEntry entry, Vector3 worldPos, float yawDeg, float scale)
+        {
+            if (settings == null) return;
+            if (!settings.createColliderProxies) return;
+            if (entry.prefab == null) return;
+            if (entry.category != VegetationCategory.Tree && entry.category != VegetationCategory.Rock) return;
+
+            EnsureColliderContainer();
+
+            Quaternion rot = Quaternion.Euler(0f, yawDeg, 0f);
+            Vector3 pos = worldPos + new Vector3(0f, entry.yOffset, 0f);
+
+            // If prefab already has colliders, clone them (best accuracy).
+            Collider[] cols = entry.prefab.GetComponentsInChildren<Collider>(true);
+            if (cols != null && cols.Length > 0)
+            {
+                for (int i = 0; i < cols.Length; i++)
+                {
+                    // Only support common colliders for proxy
+                    Collider c = cols[i];
+                    if (c == null) continue;
+                    GameObject go = new GameObject("Col");
+                    go.layer = entry.prefab.layer;
+                    go.transform.SetParent(_colliderContainer, worldPositionStays: true);
+                    go.transform.position = pos;
+                    go.transform.rotation = rot;
+                    go.transform.localScale = Vector3.one * Mathf.Max(0.001f, scale);
+
+                    // Copy local offset by parenting a child under instance root
+                    go.transform.position = pos;
+
+                    if (c is BoxCollider bc)
+                    {
+                        var n = go.AddComponent<BoxCollider>();
+                        n.center = bc.center;
+                        n.size = bc.size;
+                    }
+                    else if (c is SphereCollider sc)
+                    {
+                        var n = go.AddComponent<SphereCollider>();
+                        n.center = sc.center;
+                        n.radius = sc.radius;
+                    }
+                    else if (c is CapsuleCollider cc)
+                    {
+                        var n = go.AddComponent<CapsuleCollider>();
+                        n.center = cc.center;
+                        n.radius = cc.radius;
+                        n.height = cc.height;
+                        n.direction = cc.direction;
+                    }
+                    else if (c is MeshCollider mc)
+                    {
+                        var n = go.AddComponent<MeshCollider>();
+                        n.sharedMesh = mc.sharedMesh;
+                        n.convex = mc.convex;
+                    }
+                    else
+                    {
+                        Destroy(go);
+                    }
+                }
+                return;
+            }
+
+            if (!settings.autoGenerateColliderWhenMissing) return;
+
+            CachedBounds cb = GetOrComputeBounds(entry.prefab);
+            if (!cb.valid) return;
+
+            GameObject auto = new GameObject("ColAuto");
+            auto.layer = entry.prefab.layer;
+            auto.transform.SetParent(_colliderContainer, worldPositionStays: true);
+            auto.transform.position = pos;
+            auto.transform.rotation = rot;
+            auto.transform.localScale = Vector3.one * Mathf.Max(0.001f, scale);
+
+            // Prefer capsule for tall assets, else box.
+            if (cb.capsulePreferred)
+            {
+                var cap = auto.AddComponent<CapsuleCollider>();
+                cap.direction = 1;
+                cap.center = cb.boundsLocal.center;
+                float r = Mathf.Max(0.05f, Mathf.Min(cb.boundsLocal.extents.x, cb.boundsLocal.extents.z));
+                cap.radius = r;
+                cap.height = Mathf.Max(r * 2f, cb.boundsLocal.size.y);
+            }
+            else
+            {
+                var box = auto.AddComponent<BoxCollider>();
+                box.center = cb.boundsLocal.center;
+                box.size = cb.boundsLocal.size;
+            }
+        }
+
+        private static CachedBounds GetOrComputeBounds(GameObject prefab)
+        {
+            if (prefab == null) return default;
+            if (_boundsCache.TryGetValue(prefab, out CachedBounds cached)) return cached;
+
+            CachedBounds cb = new CachedBounds { valid = false };
+            Renderer[] rs = prefab.GetComponentsInChildren<Renderer>(true);
+            if (rs == null || rs.Length == 0)
+            {
+                _boundsCache[prefab] = cb;
+                return cb;
+            }
+
+            // Approximate bounds in prefab root local space by using Transform.InverseTransformPoint on renderer world bounds.
+            // In edit-time this may be imperfect for nested scaling, but is good enough for gameplay collision.
+            bool has = false;
+            Bounds b = new Bounds(Vector3.zero, Vector3.zero);
+            Transform root = prefab.transform;
+            for (int i = 0; i < rs.Length; i++)
+            {
+                if (rs[i] == null) continue;
+                Bounds wb = rs[i].bounds;
+                Vector3 c = root.InverseTransformPoint(wb.center);
+                // Convert size approximately by sampling extents along axes (safe-ish for mostly uniform scaling)
+                Vector3 e = wb.extents;
+                Vector3 eLocal = new Vector3(
+                    Mathf.Abs(root.InverseTransformVector(new Vector3(e.x, 0, 0)).x),
+                    Mathf.Abs(root.InverseTransformVector(new Vector3(0, e.y, 0)).y),
+                    Mathf.Abs(root.InverseTransformVector(new Vector3(0, 0, e.z)).z));
+
+                Bounds lb = new Bounds(c, eLocal * 2f);
+                if (!has) { b = lb; has = true; }
+                else { b.Encapsulate(lb.min); b.Encapsulate(lb.max); }
+            }
+
+            if (!has)
+            {
+                _boundsCache[prefab] = cb;
+                return cb;
+            }
+
+            cb.valid = true;
+            cb.boundsLocal = b;
+            cb.capsulePreferred = (b.size.y > Mathf.Max(b.size.x, b.size.z) * 1.2f);
+            _boundsCache[prefab] = cb;
+            return cb;
         }
 
         private static TreePrototype[] BuildTreePrototypes(List<VegetationPrefabEntry> entries)
