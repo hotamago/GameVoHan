@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 
 namespace InfinityTerrain.Vegetation
@@ -30,6 +31,43 @@ namespace InfinityTerrain.Vegetation
 
         private static readonly HashSet<int> _invalidDetailPrefabWarned = new HashSet<int>();
         private static readonly HashSet<int> _usingChildDetailPrefabWarned = new HashSet<int>();
+
+        // Cache reflection for Unity 2022.2+ DetailScatterMode to avoid scanning AppDomain every regen.
+        private static bool _scatterModeCached;
+        private static MethodInfo _setDetailScatterModeMethod;
+        private static object _instanceCountModeValue;
+        private static readonly object[] _scatterModeArgs = new object[1];
+
+        private static void TryCacheDetailScatterModeApi()
+        {
+            if (_scatterModeCached) return;
+            _scatterModeCached = true;
+
+            try
+            {
+                // "Gọn + chuẩn": lấy enum từ assembly của TerrainData (UnityEngine.TerrainModule)
+                Type enumType = typeof(TerrainData).Assembly.GetType("UnityEngine.DetailScatterMode");
+                if (enumType == null)
+                {
+                    // Fallback for some configurations
+                    enumType = Type.GetType("UnityEngine.DetailScatterMode, UnityEngine.TerrainModule");
+                }
+
+                if (enumType != null)
+                {
+                    _instanceCountModeValue = Enum.Parse(enumType, "InstanceCountMode");
+                }
+
+                _setDetailScatterModeMethod = typeof(TerrainData).GetMethod(
+                    "SetDetailScatterMode",
+                    BindingFlags.Public | BindingFlags.Instance);
+            }
+            catch
+            {
+                _setDetailScatterModeMethod = null;
+                _instanceCountModeValue = null;
+            }
+        }
 
         public void Clear()
         {
@@ -117,14 +155,28 @@ namespace InfinityTerrain.Vegetation
             desiredRes = (desiredRes / perPatch) * perPatch;
             if (desiredRes < perPatch) desiredRes = perPatch;
 
+            // Avoid reallocating detail data if resolution/perPatch already match (SetDetailResolution is expensive).
+            bool needSetDetailRes = true;
             try
             {
-                td.SetDetailResolution(desiredRes, perPatch);
+                needSetDetailRes = td.detailResolution != desiredRes || td.detailResolutionPerPatch != perPatch;
             }
             catch
             {
-                // Rare: Unity throws if it dislikes the combo. Fall back to a safe default.
-                td.SetDetailResolution(256, 16);
+                needSetDetailRes = true;
+            }
+
+            if (needSetDetailRes)
+            {
+                try
+                {
+                    td.SetDetailResolution(desiredRes, perPatch);
+                }
+                catch
+                {
+                    // Rare: Unity throws if it dislikes the combo. Fall back to a safe default.
+                    td.SetDetailResolution(256, 16);
+                }
             }
 
             // Quan trọng: đảm bảo map int[,] được hiểu là "số lượng instance" (0..16)
@@ -132,32 +184,12 @@ namespace InfinityTerrain.Vegetation
             // Code đang tạo count kiểu 0..16, nên phải ép về InstanceCountMode
             try
             {
-                // Thử nhiều cách để tìm DetailScatterMode enum
-                var detailScatterModeEnum = System.Type.GetType("UnityEngine.DetailScatterMode, UnityEngine.TerrainModule");
-                if (detailScatterModeEnum == null)
+                TryCacheDetailScatterModeApi();
+
+                if (_setDetailScatterModeMethod != null && _instanceCountModeValue != null)
                 {
-                    detailScatterModeEnum = System.Type.GetType("UnityEngine.DetailScatterMode");
-                }
-                if (detailScatterModeEnum == null)
-                {
-                    // Thử tìm trong tất cả assemblies
-                    foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
-                    {
-                        detailScatterModeEnum = asm.GetType("UnityEngine.DetailScatterMode");
-                        if (detailScatterModeEnum != null) break;
-                    }
-                }
-                
-                if (detailScatterModeEnum != null)
-                {
-                    var instanceCountModeValue = System.Enum.Parse(detailScatterModeEnum, "InstanceCountMode");
-                    var setDetailScatterModeMethod = typeof(TerrainData).GetMethod("SetDetailScatterMode",
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    
-                    if (setDetailScatterModeMethod != null)
-                    {
-                        setDetailScatterModeMethod.Invoke(td, new object[] { instanceCountModeValue });
-                    }
+                    _scatterModeArgs[0] = _instanceCountModeValue;
+                    _setDetailScatterModeMethod.Invoke(td, _scatterModeArgs);
                 }
             }
             catch
