@@ -127,6 +127,44 @@ namespace InfinityTerrain.Vegetation
                 td.SetDetailResolution(256, 16);
             }
 
+            // Quan trọng: đảm bảo map int[,] được hiểu là "số lượng instance" (0..16)
+            // Unity 2022.2+ có DetailScatterMode: InstanceCountMode (0..16) vs CoverageMode (0..255)
+            // Code đang tạo count kiểu 0..16, nên phải ép về InstanceCountMode
+            try
+            {
+                // Thử nhiều cách để tìm DetailScatterMode enum
+                var detailScatterModeEnum = System.Type.GetType("UnityEngine.DetailScatterMode, UnityEngine.TerrainModule");
+                if (detailScatterModeEnum == null)
+                {
+                    detailScatterModeEnum = System.Type.GetType("UnityEngine.DetailScatterMode");
+                }
+                if (detailScatterModeEnum == null)
+                {
+                    // Thử tìm trong tất cả assemblies
+                    foreach (var asm in System.AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        detailScatterModeEnum = asm.GetType("UnityEngine.DetailScatterMode");
+                        if (detailScatterModeEnum != null) break;
+                    }
+                }
+                
+                if (detailScatterModeEnum != null)
+                {
+                    var instanceCountModeValue = System.Enum.Parse(detailScatterModeEnum, "InstanceCountMode");
+                    var setDetailScatterModeMethod = typeof(TerrainData).GetMethod("SetDetailScatterMode",
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    
+                    if (setDetailScatterModeMethod != null)
+                    {
+                        setDetailScatterModeMethod.Invoke(td, new object[] { instanceCountModeValue });
+                    }
+                }
+            }
+            catch
+            {
+                // Unity version doesn't support SetDetailScatterMode (pre-2022.2), fallback to default behavior
+            }
+
             td.detailPrototypes = BuildDetailPrototypes(uniqueEntries);
             
             // Refresh prototypes to ensure Unity reloads detail assets (fixes "no spawn" issues)
@@ -229,6 +267,11 @@ namespace InfinityTerrain.Vegetation
                 td.SetDetailLayer(0, 0, i, layers[i]);
             }
 
+            // Đảm bảo Terrain render settings cho phép hiển thị details
+            // Nếu distance/density = 0 thì dù có data cũng không render
+            terrain.detailObjectDistance = Mathf.Max(terrain.detailObjectDistance, 80f);
+            terrain.detailObjectDensity = Mathf.Max(terrain.detailObjectDensity, 1f);
+
             terrain.Flush();
         }
 
@@ -322,6 +365,8 @@ namespace InfinityTerrain.Vegetation
 
                 // Enable GPU Instancing for proper material/shader rendering (fixes white/blank textures in URP)
                 // Unity 6 DetailPrototype supports useInstancing field
+                // Quan trọng: Mesh-based details phải dùng VertexLit, không dùng Grass (Grass chỉ cho texture/billboard)
+                // Unity doc: GrassBillboard => usePrototypeMesh = false, VertexLit => usePrototypeMesh = true
                 protos[i] = new DetailPrototype
                 {
                     usePrototypeMesh = true,
@@ -333,7 +378,9 @@ namespace InfinityTerrain.Vegetation
                     noiseSpread = 0.5f,
                     healthyColor = Color.white,
                     dryColor = Color.white,
-                    renderMode = (e.category == VegetationCategory.Grass) ? DetailRenderMode.Grass : DetailRenderMode.VertexLit
+                    // Mesh-based details (usePrototypeMesh=true) phải dùng VertexLit, không dùng Grass
+                    // Grass mode chỉ dành cho texture/billboard (usePrototypeMesh=false)
+                    renderMode = DetailRenderMode.VertexLit
                 };
 
                 // Set useInstancing via reflection for Unity 6 compatibility (field/property exists in Unity 6+)
@@ -689,5 +736,7 @@ namespace InfinityTerrain.Vegetation
         }
     }
 }
+
+
 
 
