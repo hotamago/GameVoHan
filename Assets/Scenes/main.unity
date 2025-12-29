@@ -577,7 +577,7 @@ MonoBehaviour:
   - {fileID: 6375836955102501150, guid: 0714e774b10e5554f986ebe42387b3c9, type: 3}
   chunkGodRaysPrefabs:
   - {fileID: 2076003895308449357, guid: 2f8e0aa312b32ee4fab7ba2c2845e399, type: 3}
-  vfxRenderDistance: 2
+  vfxRenderDistance: 1
   vfxOnlyMaxLod: 1
   particlesPerChunk: 10
   godRaysPerChunk: 4
@@ -591,6 +591,10 @@ MonoBehaviour:
   godRaysRandomRollRange: {x: -40, y: 40}
   godRaysRandomYawRange: 360
   terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
+  enableAsyncHeightmapStreaming: 1
+  asyncHeightmapsMaxInFlight: 2
+  asyncHeightmapsStartPerFrame: 1
+  asyncHeightmapsApplyPerFrame: 1
   vegetationGenerateBudgetPerFrame: 1
   detailGenerateBudgetPerFrame: 1
   vfxGenerateBudgetPerFrame: 2
@@ -873,6 +877,18 @@ PrefabInstance:
     - target: {fileID: 207922507796031181, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
       propertyPath: m_IsActive
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1869661500438459488, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
+      propertyPath: flySpeed
+      value: 40
+      objectReference: {fileID: 0}
+    - target: {fileID: 1869661500438459488, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
+      propertyPath: jumpForce
+      value: 5
+      objectReference: {fileID: 0}
+    - target: {fileID: 1869661500438459488, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
+      propertyPath: groundLayer.m_Bits
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 2696770008557388693, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
       propertyPath: m_LocalPosition.x
