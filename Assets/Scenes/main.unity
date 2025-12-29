@@ -513,11 +513,12 @@ MonoBehaviour:
   blendNoiseStrength: 0.12
   enableTerrainTrees: 1
   vegetationScatterSettings: {fileID: 11400000, guid: 54f823a81842f0345918e4386d77ecde, type: 2}
-  vegetationRenderDistance: 2
+  vegetationRenderDistance: 1
   vegetationOnlyMaxLod: 0
   vegetationIncludeNonTreesAsTrees: 1
   vegetationExcludeGrass: 0
   terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
+  vegetationGenerateBudgetPerFrame: 1
 --- !u!1 &971395975
 GameObject:
   m_ObjectHideFlags: 0

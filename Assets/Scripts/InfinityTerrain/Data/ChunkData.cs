@@ -16,6 +16,12 @@ namespace InfinityTerrain.Data
         public long noiseChunkY;
         public int baseVertsPerChunk;
         public float chunkSizeWorld;
+
+        /// <summary>
+        /// Optional cached heightmap (0..1) for this chunk, primarily for vegetation sampling.
+        /// Note: Stored as [y,x] matching Unity TerrainData.SetHeights convention.
+        /// </summary>
+        public float[,] heights01;
     }
 
     /// <summary>

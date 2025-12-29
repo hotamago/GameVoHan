@@ -13,16 +13,18 @@ MonoBehaviour:
   m_Name: VegetationScatterSettings
   m_EditorClassIdentifier: Assembly-CSharp::InfinityTerrain.Vegetation.VegetationScatterSettings
   seedOffset: 8386
-  minHeight01: 0.28
-  maxHeight01: 0.95
-  maxSlopeDeg: 27.9
+  minHeight01: 0.344
+  maxHeight01: 0.706
+  maxSlopeDeg: 35.5
   waterExclusionYOffset: 0.5
-  treesPerChunk: 50
-  rocksPerChunk: 10
+  treesPerChunk: 20
+  rocksPerChunk: 5
   plantsPerChunk: 20
   grassPerChunk: 100
-  plantsDensityPerM2: 0
-  grassDensityPerM2: 0
+  plantsDensityPerM2: 0.09
+  grassDensityPerM2: 0.52
+  maxPlantsPerChunk: 2500
+  maxGrassPerChunk: 6000
   treeMinSpacing: 2
   rockMinSpacing: 5
   plantMinSpacing: 0.2
@@ -32,7 +34,7 @@ MonoBehaviour:
   treeClusterCellSize: 35
   treeClusterThreshold: 0.55
   treeClusterSharpness: 2.5
-  createColliderProxies: 1
+  createColliderProxies: 0
   autoGenerateColliderWhenMissing: 1
   prefabs:
   - name: BlossomTree_01

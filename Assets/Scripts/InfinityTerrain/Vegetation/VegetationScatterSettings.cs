@@ -29,6 +29,12 @@ namespace InfinityTerrain.Vegetation
         [Tooltip("If > 0, Grass will be spawned using a probability/density approach instead of a fixed per-chunk count.")]
         [Min(0f)] public float grassDensityPerM2 = 0f;
 
+        [Header("Density Safety Caps (base chunk ~100x100)")]
+        [Tooltip("Upper limit to prevent extreme densities from tanking FPS. Scales with chunk area like other budgets.")]
+        [Min(0)] public int maxPlantsPerChunk = 2500;
+        [Tooltip("Upper limit to prevent extreme densities from tanking FPS. Scales with chunk area like other budgets.")]
+        [Min(0)] public int maxGrassPerChunk = 6000;
+
         [Header("Min Spacing (meters)")]
         [Min(0f)] public float treeMinSpacing = 6f;
         [Min(0f)] public float rockMinSpacing = 4f;

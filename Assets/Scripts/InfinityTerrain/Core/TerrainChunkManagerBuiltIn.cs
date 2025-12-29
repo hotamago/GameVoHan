@@ -350,6 +350,9 @@ namespace InfinityTerrain.Core
             // is not available everywhere. Use SetHeights for maximum compatibility.
             td.SetHeights(0, 0, heights01);
 
+            // Cache heights for vegetation (prevents expensive re-generation + GPU readback stutters)
+            data.heights01 = heights01;
+
             // Optional runtime texture splatmap based on height/slope/noise (multiple TerrainLayers needed).
             if (_enableAutoSplatmap && td.terrainLayers != null && td.terrainLayers.Length >= 2 && _materialSettings != null)
             {
@@ -420,6 +423,7 @@ namespace InfinityTerrain.Core
             data.isReady = false;
             data.noiseChunkX = 0;
             data.noiseChunkY = 0;
+            data.heights01 = null;
 
             data.gameObject.SetActive(false);
             data.gameObject.transform.SetParent(_parentTransform, worldPositionStays: true);

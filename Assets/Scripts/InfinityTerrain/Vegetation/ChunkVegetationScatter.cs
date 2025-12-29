@@ -120,7 +120,7 @@ namespace InfinityTerrain.Vegetation
             _lastMeshInstanceId = meshId;
             _lastSeed = seed;
 
-            Regenerate(mc, chunkX, chunkY, seed, chunkSize);
+            Regenerate(mc, mf, chunkX, chunkY, seed, chunkSize, lodResolution);
             return true;
         }
 
@@ -180,11 +180,17 @@ namespace InfinityTerrain.Vegetation
         private static readonly Dictionary<GameObject, List<ColliderInfo>> _colliderCache = new Dictionary<GameObject, List<ColliderInfo>>();
         private static readonly Dictionary<GameObject, Bounds> _boundsCache = new Dictionary<GameObject, Bounds>();
 
-        private void Regenerate(MeshCollider mc, long chunkX, long chunkY, int seed, float chunkSize)
+        private void Regenerate(MeshCollider mc, MeshFilter mf, long chunkX, long chunkY, int seed, float chunkSize, int lodResolution)
         {
             Clear();
 
             if (settings.prefabs == null || settings.prefabs.Count == 0) return;
+            if (mf == null || mf.sharedMesh == null) return;
+
+            Mesh mesh = mf.sharedMesh;
+            Vector3[] verts = mesh.vertices;
+            Vector3[] norms = mesh.normals;
+            bool canSampleMesh = (verts != null && norms != null && verts.Length == lodResolution * lodResolution && norms.Length == verts.Length);
 
             // Ensure container exists for colliders
             if (_container == null) _container = FindOrCreateContainer();
@@ -220,31 +226,50 @@ namespace InfinityTerrain.Vegetation
             int plantCount = Mathf.RoundToInt(settings.plantsPerChunk * areaScale);
             int grassCount = Mathf.RoundToInt(settings.grassPerChunk * areaScale);
 
-            SpawnCategoryInstanced(mc, seed ^ 0x1A2B3C4D, trees, treeCount, settings.treeMinSpacing, chunkSize, true, enableClustering: true);
-            SpawnCategoryInstanced(mc, seed ^ 0x22334455, rocks, rockCount, settings.rockMinSpacing, chunkSize, true);
+            SpawnCategoryInstanced(
+                mc, canSampleMesh, verts, norms, lodResolution,
+                seed ^ 0x1A2B3C4D, trees, treeCount, settings.treeMinSpacing, chunkSize, true, enableClustering: true);
+
+            SpawnCategoryInstanced(
+                mc, canSampleMesh, verts, norms, lodResolution,
+                seed ^ 0x22334455, rocks, rockCount, settings.rockMinSpacing, chunkSize, true);
             
             // Visual only for Plants and Grass
             if (settings.plantsDensityPerM2 > 0f)
             {
-                SpawnCategoryDensityInstanced(mc, seed ^ 0x66778899, plants, settings.plantsDensityPerM2, settings.plantMinSpacing, chunkSize, false);
+                int cap = Mathf.RoundToInt(settings.maxPlantsPerChunk * areaScale);
+                SpawnCategoryDensityInstanced(
+                    mc, canSampleMesh, verts, norms, lodResolution,
+                    seed ^ 0x66778899, plants, settings.plantsDensityPerM2, cap, settings.plantMinSpacing, chunkSize, false);
             }
             else
             {
-                SpawnCategoryInstanced(mc, seed ^ 0x66778899, plants, plantCount, settings.plantMinSpacing, chunkSize, false);
+                SpawnCategoryInstanced(
+                    mc, canSampleMesh, verts, norms, lodResolution,
+                    seed ^ 0x66778899, plants, plantCount, settings.plantMinSpacing, chunkSize, false);
             }
 
             if (settings.grassDensityPerM2 > 0f)
             {
-                SpawnCategoryDensityInstanced(mc, seed ^ 0x13579BDF, grass, settings.grassDensityPerM2, settings.grassMinSpacing, chunkSize, false);
+                int cap = Mathf.RoundToInt(settings.maxGrassPerChunk * areaScale);
+                SpawnCategoryDensityInstanced(
+                    mc, canSampleMesh, verts, norms, lodResolution,
+                    seed ^ 0x13579BDF, grass, settings.grassDensityPerM2, cap, settings.grassMinSpacing, chunkSize, false);
             }
             else
             {
-                SpawnCategoryInstanced(mc, seed ^ 0x13579BDF, grass, grassCount, settings.grassMinSpacing, chunkSize, false);
+                SpawnCategoryInstanced(
+                    mc, canSampleMesh, verts, norms, lodResolution,
+                    seed ^ 0x13579BDF, grass, grassCount, settings.grassMinSpacing, chunkSize, false);
             }
         }
 
         private void SpawnCategoryInstanced(
             MeshCollider mc,
+            bool canSampleMesh,
+            Vector3[] verts,
+            Vector3[] norms,
+            int lodResolution,
             int seed,
             List<VegetationPrefabEntry> entries,
             int targetCount,
@@ -262,31 +287,24 @@ namespace InfinityTerrain.Vegetation
             if (chunkSize <= 0.001f) return;
 
             int attempts = Mathf.Max(targetCount * settings.attemptsPerSpawn, targetCount);
-            float yTop = Mathf.Max(200f, heightMultiplier * 3f);
-            float rayLen = yTop + 500f;
 
             for (int a = 0; a < attempts && placed.Count < targetCount; a++)
             {
                 float x = (float)rng.NextDouble() * chunkSize;
                 float z = (float)rng.NextDouble() * chunkSize;
 
-                Vector3 origin = transform.position + new Vector3(x, yTop, z);
-                Ray ray = new Ray(origin, Vector3.down);
-
-                if (!mc.Raycast(ray, out RaycastHit hit, rayLen)) continue;
+                if (!TrySampleSurface(mc, canSampleMesh, verts, norms, lodResolution, chunkSize, x, z, out Vector3 p, out Vector3 n)) continue;
 
                 // Height filter
-                float h01 = Mathf.Clamp01(hit.point.y / Mathf.Max(0.0001f, heightMultiplier));
+                float h01 = Mathf.Clamp01(p.y / Mathf.Max(0.0001f, heightMultiplier));
                 if (h01 < settings.minHeight01 || h01 > settings.maxHeight01) continue;
 
                 // Water exclusion
-                if (hit.point.y < (waterSurfaceY + settings.waterExclusionYOffset)) continue;
+                if (p.y < (waterSurfaceY + settings.waterExclusionYOffset)) continue;
 
                 // Slope filter
-                float slope = Vector3.Angle(hit.normal, Vector3.up);
+                float slope = Vector3.Angle(n, Vector3.up);
                 if (slope > settings.maxSlopeDeg) continue;
-
-                Vector3 p = hit.point; 
 
                 // Spacing check
                 if (minSpacing > 0f)
@@ -307,21 +325,21 @@ namespace InfinityTerrain.Vegetation
                 }
 
                 // Pick Prefab
-                VegetationPrefabEntry entry = enableClustering ? PickWeightedClustered(rng, entries, hit.point) : PickWeighted(rng, entries);
+                VegetationPrefabEntry entry = enableClustering ? PickWeightedClustered(rng, entries, p) : PickWeighted(rng, entries);
                 if (entry.prefab == null) continue;
 
                 // Transform
-                Quaternion rot = ComputeRotation(rng, entry, hit.normal);
+                Quaternion rot = ComputeRotation(rng, entry, n);
                 float scale = RandomRange(rng, entry.minUniformScale, entry.maxUniformScale);
                 if (scale <= 0f) scale = 1f;
 
                 // Register Instance
-                RegisterInstance(entry.prefab, p + (hit.normal * entry.yOffset), rot, scale);
+                RegisterInstance(entry.prefab, p + (n * entry.yOffset), rot, scale);
 
                 // Create Collider Proxy if needed
                 if (createColliders)
                 {
-                    CreateColliderProxies(entry.prefab, p + (hit.normal * entry.yOffset), rot, scale);
+                    CreateColliderProxies(entry.prefab, p + (n * entry.yOffset), rot, scale);
                 }
 
                 placed.Add(p);
@@ -330,9 +348,14 @@ namespace InfinityTerrain.Vegetation
 
         private void SpawnCategoryDensityInstanced(
             MeshCollider mc,
+            bool canSampleMesh,
+            Vector3[] verts,
+            Vector3[] norms,
+            int lodResolution,
             int seed,
             List<VegetationPrefabEntry> entries,
             float densityPerM2,
+            int maxPerChunk,
             float minSpacing,
             float chunkSize,
             bool createColliders,
@@ -342,66 +365,131 @@ namespace InfinityTerrain.Vegetation
             if (densityPerM2 <= 0f) return;
             if (chunkSize <= 0.001f) return;
 
-            float cell = Mathf.Max(0.25f, Mathf.Max(0f, minSpacing));
-            float cellArea = cell * cell;
-            float pSpawn = Mathf.Clamp01(densityPerM2 * cellArea);
-            if (pSpawn <= 0f) return;
-
-            int cellsX = Mathf.Max(1, Mathf.CeilToInt(chunkSize / cell));
-            int cellsZ = Mathf.Max(1, Mathf.CeilToInt(chunkSize / cell));
+            // NOTE: Full cell-grid scanning + per-point raycasts is very expensive at high densities.
+            // Instead, convert density -> expected count, clamp, and use random sampling attempts.
+            float area = chunkSize * chunkSize;
+            int target = Mathf.RoundToInt(densityPerM2 * area);
+            if (maxPerChunk > 0) target = Mathf.Min(target, maxPerChunk);
+            if (target <= 0) return;
 
             System.Random rng = new System.Random(seed);
-            List<Vector3> placed = new List<Vector3>(Mathf.RoundToInt(chunkSize * chunkSize * densityPerM2));
+            int attempts = Mathf.Max(target * settings.attemptsPerSpawn, target);
+            int spawned = 0;
 
-            float minSq = Mathf.Max(0f, minSpacing) * Mathf.Max(0f, minSpacing);
+            // For grass/plants, strict Poisson spacing is not worth O(n^2) checks at high counts.
+            // We rely on random sampling + per-prefab visual density.
+            for (int a = 0; a < attempts && spawned < target; a++)
+            {
+                float x = (float)rng.NextDouble() * chunkSize;
+                float z = (float)rng.NextDouble() * chunkSize;
+
+                if (!TrySampleSurface(mc, canSampleMesh, verts, norms, lodResolution, chunkSize, x, z, out Vector3 p, out Vector3 n)) continue;
+
+                float h01 = Mathf.Clamp01(p.y / Mathf.Max(0.0001f, heightMultiplier));
+                if (h01 < settings.minHeight01 || h01 > settings.maxHeight01) continue;
+                if (p.y < (waterSurfaceY + settings.waterExclusionYOffset)) continue;
+                float slope = Vector3.Angle(n, Vector3.up);
+                if (slope > settings.maxSlopeDeg) continue;
+
+                VegetationPrefabEntry entry = enableClustering ? PickWeightedClustered(rng, entries, p) : PickWeighted(rng, entries);
+                if (entry.prefab == null) continue;
+
+                Quaternion rot = ComputeRotation(rng, entry, n);
+                float scale = RandomRange(rng, entry.minUniformScale, entry.maxUniformScale);
+                if (scale <= 0f) scale = 1f;
+
+                RegisterInstance(entry.prefab, p + (n * entry.yOffset), rot, scale);
+                if (createColliders) CreateColliderProxies(entry.prefab, p + (n * entry.yOffset), rot, scale);
+                spawned++;
+            }
+        }
+
+        private bool TrySampleSurface(
+            MeshCollider mc,
+            bool canSampleMesh,
+            Vector3[] verts,
+            Vector3[] norms,
+            int lodResolution,
+            float chunkSize,
+            float localX,
+            float localZ,
+            out Vector3 worldPoint,
+            out Vector3 worldNormal)
+        {
+            // Fast path: sample from mesh grid directly (no Physics.Raycast).
+            if (canSampleMesh && TrySampleSurfaceFromMesh(verts, norms, lodResolution, chunkSize, localX, localZ, out float h, out Vector3 nLocal))
+            {
+                worldPoint = transform.position + new Vector3(localX, h, localZ);
+                worldNormal = transform.TransformDirection(nLocal);
+                if (worldNormal.sqrMagnitude < 1e-6f) worldNormal = Vector3.up;
+                else worldNormal.Normalize();
+                return true;
+            }
+
+            // Fallback: Physics raycast (slow).
             float yTop = Mathf.Max(200f, heightMultiplier * 3f);
             float rayLen = yTop + 500f;
-
-            for (int iz = 0; iz < cellsZ; iz++)
+            Vector3 origin = transform.position + new Vector3(localX, yTop, localZ);
+            Ray ray = new Ray(origin, Vector3.down);
+            if (mc != null && mc.Raycast(ray, out RaycastHit hit, rayLen))
             {
-                for (int ix = 0; ix < cellsX; ix++)
-                {
-                    if (rng.NextDouble() > pSpawn) continue;
-
-                    float x = (ix + (float)rng.NextDouble()) * cell;
-                    float z = (iz + (float)rng.NextDouble()) * cell;
-                    if (x < 0f || z < 0f || x > chunkSize || z > chunkSize) continue;
-
-                    Vector3 origin = transform.position + new Vector3(x, yTop, z);
-                    Ray ray = new Ray(origin, Vector3.down);
-                    if (!mc.Raycast(ray, out RaycastHit hit, rayLen)) continue;
-
-                    float h01 = Mathf.Clamp01(hit.point.y / Mathf.Max(0.0001f, heightMultiplier));
-                    if (h01 < settings.minHeight01 || h01 > settings.maxHeight01) continue;
-                    if (hit.point.y < (waterSurfaceY + settings.waterExclusionYOffset)) continue;
-                    float slope = Vector3.Angle(hit.normal, Vector3.up);
-                    if (slope > settings.maxSlopeDeg) continue;
-
-                    Vector3 p = hit.point;
-                    if (minSq > 0f)
-                    {
-                        bool ok = true;
-                        for (int i = 0; i < placed.Count; i++)
-                        {
-                            Vector3 d = placed[i] - p;
-                            d.y = 0f;
-                            if (d.sqrMagnitude < minSq) { ok = false; break; }
-                        }
-                        if (!ok) continue;
-                    }
-
-                    VegetationPrefabEntry entry = enableClustering ? PickWeightedClustered(rng, entries, hit.point) : PickWeighted(rng, entries);
-                    if (entry.prefab == null) continue;
-
-                    Quaternion rot = ComputeRotation(rng, entry, hit.normal);
-                    float scale = RandomRange(rng, entry.minUniformScale, entry.maxUniformScale);
-                    if (scale <= 0f) scale = 1f;
-
-                    RegisterInstance(entry.prefab, p + (hit.normal * entry.yOffset), rot, scale);
-                    if (createColliders) CreateColliderProxies(entry.prefab, p + (hit.normal * entry.yOffset), rot, scale);
-                    placed.Add(p);
-                }
+                worldPoint = hit.point;
+                worldNormal = hit.normal;
+                return true;
             }
+
+            worldPoint = default;
+            worldNormal = Vector3.up;
+            return false;
+        }
+
+        private static bool TrySampleSurfaceFromMesh(
+            Vector3[] verts,
+            Vector3[] norms,
+            int res,
+            float chunkSize,
+            float localX,
+            float localZ,
+            out float height,
+            out Vector3 normalLocal)
+        {
+            height = 0f;
+            normalLocal = Vector3.up;
+            if (verts == null || norms == null) return false;
+            if (res <= 1) return false;
+            int expected = res * res;
+            if (verts.Length < expected || norms.Length < expected) return false;
+
+            float step = chunkSize / Mathf.Max(1, res - 1);
+            float fx = Mathf.Clamp(localX / Mathf.Max(0.0001f, step), 0f, res - 1.001f);
+            float fz = Mathf.Clamp(localZ / Mathf.Max(0.0001f, step), 0f, res - 1.001f);
+
+            int x0 = Mathf.FloorToInt(fx);
+            int z0 = Mathf.FloorToInt(fz);
+            int x1 = Mathf.Min(res - 1, x0 + 1);
+            int z1 = Mathf.Min(res - 1, z0 + 1);
+            float tx = fx - x0;
+            float tz = fz - z0;
+
+            int i00 = x0 + z0 * res;
+            int i10 = x1 + z0 * res;
+            int i01 = x0 + z1 * res;
+            int i11 = x1 + z1 * res;
+
+            float h00 = verts[i00].y;
+            float h10 = verts[i10].y;
+            float h01 = verts[i01].y;
+            float h11 = verts[i11].y;
+            height = Mathf.Lerp(Mathf.Lerp(h00, h10, tx), Mathf.Lerp(h01, h11, tx), tz);
+
+            Vector3 n00 = norms[i00];
+            Vector3 n10 = norms[i10];
+            Vector3 n01 = norms[i01];
+            Vector3 n11 = norms[i11];
+            Vector3 n = Vector3.Lerp(Vector3.Lerp(n00, n10, tx), Vector3.Lerp(n01, n11, tx), tz);
+            if (n.sqrMagnitude < 1e-6f) n = Vector3.up;
+            normalLocal = n.normalized;
+            return true;
         }
 
         private void RegisterInstance(GameObject prefab, Vector3 position, Quaternion rotation, float scale)

@@ -161,9 +161,10 @@ namespace InfinityTerrain.Vegetation
             {
                 if (settings.plantsDensityPerM2 > 0f)
                 {
+                    int cap = Mathf.RoundToInt(settings.maxPlantsPerChunk * areaScale);
                     SpawnDensityCategory(
                         terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
-                        plantEntries, settings.plantsDensityPerM2, settings.plantMinSpacing, placedXZ, instances, enableClustering: false);
+                        plantEntries, settings.plantsDensityPerM2, cap, settings.plantMinSpacing, instances, enableClustering: false);
                 }
                 else
                 {
@@ -178,9 +179,10 @@ namespace InfinityTerrain.Vegetation
             {
                 if (settings.grassDensityPerM2 > 0f)
                 {
+                    int cap = Mathf.RoundToInt(settings.maxGrassPerChunk * areaScale);
                     SpawnDensityCategory(
                         terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
-                        grassEntries, settings.grassDensityPerM2, settings.grassMinSpacing, placedXZ, instances, enableClustering: false);
+                        grassEntries, settings.grassDensityPerM2, cap, settings.grassMinSpacing, instances, enableClustering: false);
                 }
                 else
                 {
@@ -271,8 +273,8 @@ namespace InfinityTerrain.Vegetation
             float invChunk,
             List<VegetationPrefabEntry> entries,
             float densityPerM2,
+            int maxPerChunk,
             float minSpacing,
-            List<Vector2> placedXZ,
             List<TreeInstance> instances,
             bool enableClustering)
         {
@@ -280,58 +282,48 @@ namespace InfinityTerrain.Vegetation
             if (entries == null || entries.Count == 0) return;
             if (densityPerM2 <= 0f) return;
 
-            float cell = Mathf.Max(0.25f, Mathf.Max(0f, minSpacing));
-            float cellArea = cell * cell;
-            float p = Mathf.Clamp01(densityPerM2 * cellArea);
-            if (p <= 0f) return;
+            float area = chunkSizeWorld * chunkSizeWorld;
+            int target = Mathf.RoundToInt(densityPerM2 * area);
+            if (maxPerChunk > 0) target = Mathf.Min(target, maxPerChunk);
+            if (target <= 0) return;
 
-            int cellsX = Mathf.Max(1, Mathf.CeilToInt(chunkSizeWorld / cell));
-            int cellsZ = Mathf.Max(1, Mathf.CeilToInt(chunkSizeWorld / cell));
-            float minSq = Mathf.Max(0f, minSpacing) * Mathf.Max(0f, minSpacing);
+            int attempts = Mathf.Max(target * settings.attemptsPerSpawn, target);
+            int spawned = 0;
 
-            for (int iz = 0; iz < cellsZ; iz++)
+            for (int a = 0; a < attempts && spawned < target; a++)
             {
-                for (int ix = 0; ix < cellsX; ix++)
+                float x = (float)rng.NextDouble() * chunkSizeWorld;
+                float z = (float)rng.NextDouble() * chunkSizeWorld;
+
+                if (!PassPlacementFilters(heights01, x, z, step, out float h01)) continue;
+
+                VegetationPrefabEntry entry = enableClustering
+                    ? PickWeightedClustered(rng, entries, terrain, x, z)
+                    : PickWeighted(rng, entries);
+                if (entry.prefab == null) continue;
+
+                int protoIndex = FindPrototypeIndex(td.treePrototypes, entry.prefab);
+                if (protoIndex < 0) continue;
+
+                float scale = RandomRange(rng, entry.minUniformScale, entry.maxUniformScale);
+                if (scale <= 0f) scale = 1f;
+
+                float yawDeg = entry.randomYaw ? (float)(rng.NextDouble() * 360.0) : 0f;
+                float yawRad = yawDeg * Mathf.Deg2Rad;
+
+                TreeInstance ti = new TreeInstance
                 {
-                    if (rng.NextDouble() > p) continue;
+                    prototypeIndex = protoIndex,
+                    position = new Vector3(x * invChunk, h01, z * invChunk),
+                    widthScale = scale,
+                    heightScale = scale,
+                    rotation = yawRad,
+                    color = Color.white,
+                    lightmapColor = Color.white
+                };
 
-                    // Jitter inside cell
-                    float x = (ix + (float)rng.NextDouble()) * cell;
-                    float z = (iz + (float)rng.NextDouble()) * cell;
-                    if (x < 0f || z < 0f || x > chunkSizeWorld || z > chunkSizeWorld) continue;
-
-                    if (!PassPlacementFilters(heights01, x, z, step, out float h01)) continue;
-                    if (minSq > 0f && !PassSpacing(placedXZ, x, z, minSq)) continue;
-
-                    VegetationPrefabEntry entry = enableClustering
-                        ? PickWeightedClustered(rng, entries, terrain, x, z)
-                        : PickWeighted(rng, entries);
-                    if (entry.prefab == null) continue;
-
-                    int protoIndex = FindPrototypeIndex(td.treePrototypes, entry.prefab);
-                    if (protoIndex < 0) continue;
-
-                    float scale = RandomRange(rng, entry.minUniformScale, entry.maxUniformScale);
-                    if (scale <= 0f) scale = 1f;
-
-                    float yawDeg = entry.randomYaw ? (float)(rng.NextDouble() * 360.0) : 0f;
-                    float yawRad = yawDeg * Mathf.Deg2Rad;
-
-                    TreeInstance ti = new TreeInstance
-                    {
-                        prototypeIndex = protoIndex,
-                        position = new Vector3(x * invChunk, h01, z * invChunk),
-                        widthScale = scale,
-                        heightScale = scale,
-                        rotation = yawRad,
-                        color = Color.white,
-                        lightmapColor = Color.white
-                    };
-
-                    instances.Add(ti);
-                    placedXZ.Add(new Vector2(x, z));
-                    MaybeCreateColliderProxy(entry, terrain.transform.position + new Vector3(x, h01 * heightMultiplier, z), yawDeg, scale);
-                }
+                instances.Add(ti);
+                spawned++;
             }
         }
 
