@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using Unity.Collections;
+using Unity.Jobs;
 using UnityEngine;
 
 namespace InfinityTerrain.Vegetation
@@ -22,6 +24,20 @@ namespace InfinityTerrain.Vegetation
 
         [Tooltip("Include VegetationCategory.Plant entries as Terrain detail layers.")]
         public bool includePlants = true;
+
+        [Header("Performance (Jobs/Burst)")]
+        [Tooltip("If enabled, uses Unity Job System + Burst to compute detail layers faster. " +
+                 "TerrainData.SetDetailLayer is still applied on the main thread.")]
+        public bool useJobsAndBurst = true;
+
+        [Tooltip("Batch size for IJobParallelFor scheduling. Typical: 32..256.")]
+        public int jobBatchSize = 128;
+
+        [Tooltip("If enabled, scales Terrain detail resolution down for far LOD chunks.")]
+        public bool scaleDetailResolutionWithLod = true;
+
+        [Tooltip("Minimum detail resolution when scaling with LOD.")]
+        public int minDetailResolutionWhenScaling = 64;
 
         private long _lastChunkX;
         private long _lastChunkY;
@@ -168,6 +184,15 @@ namespace InfinityTerrain.Vegetation
             // Unity requires detailResolution to be a multiple of resolutionPerPatch.
             int perPatch = Mathf.Clamp(settings.terrainDetailResolutionPerPatch, 4, 64);
             int desiredRes = Mathf.Clamp(settings.terrainDetailResolution, 32, 1024);
+
+            if (scaleDetailResolutionWithLod)
+            {
+                // Tie detail density to chunk heightmap LOD to reduce CPU generation work far away.
+                // Example: 129->258 (clamped), 65->130, 33->66, 17->34 (then clamped to min).
+                int lodBased = Mathf.Max(minDetailResolutionWhenScaling, _lastLodResolution * 2);
+                desiredRes = Mathf.Min(desiredRes, lodBased);
+            }
+
             desiredRes = Mathf.Max(desiredRes, perPatch);
             desiredRes = (desiredRes / perPatch) * perPatch;
             if (desiredRes < perPatch) desiredRes = perPatch;
@@ -255,6 +280,146 @@ namespace InfinityTerrain.Vegetation
             int plantsMaxPerCell = includePlants ? Mathf.Clamp(settings.plantsMaxPerCell, 0, 16) : 0;
 
             float cellSize = chunkSizeWorld / res;
+
+            // Jobs + Burst path
+            if (useJobsAndBurst)
+            {
+                NativeArray<float> heightsFlat = default;
+                NativeArray<int> grassIdx = default;
+                NativeArray<float> grassCum = default;
+                NativeArray<int> plantIdx = default;
+                NativeArray<float> plantCum = default;
+                NativeArray<short> outGrassLayer = default;
+                NativeArray<byte> outGrassValue = default;
+                NativeArray<short> outPlantLayer = default;
+                NativeArray<byte> outPlantValue = default;
+
+                try
+                {
+                    int totalCells = res * res;
+
+                    // Flatten heightmap for Burst access: heights01[y,x] => flat[y*heightRes+x]
+                    heightsFlat = new NativeArray<float>(heightRes * heightRes, Allocator.TempJob);
+                    for (int y = 0; y < heightRes; y++)
+                    {
+                        int row = y * heightRes;
+                        for (int x = 0; x < heightRes; x++)
+                        {
+                            heightsFlat[row + x] = heights01[y, x];
+                        }
+                    }
+
+                    // Proto arrays + cumulative weights
+                    grassIdx = new NativeArray<int>(grassProtoIdx.Count, Allocator.TempJob);
+                    grassCum = new NativeArray<float>(grassWeights.Count, Allocator.TempJob);
+                    float grassAcc = 0f;
+                    for (int i = 0; i < grassProtoIdx.Count; i++)
+                    {
+                        grassIdx[i] = grassProtoIdx[i];
+                        grassAcc += Mathf.Max(0f, grassWeights[i]);
+                        grassCum[i] = grassAcc;
+                    }
+
+                    plantIdx = new NativeArray<int>(plantProtoIdx.Count, Allocator.TempJob);
+                    plantCum = new NativeArray<float>(plantWeights.Count, Allocator.TempJob);
+                    float plantAcc = 0f;
+                    for (int i = 0; i < plantProtoIdx.Count; i++)
+                    {
+                        plantIdx[i] = plantProtoIdx[i];
+                        plantAcc += Mathf.Max(0f, plantWeights[i]);
+                        plantCum[i] = plantAcc;
+                    }
+
+                    outGrassLayer = new NativeArray<short>(totalCells, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+                    outGrassValue = new NativeArray<byte>(totalCells, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+                    outPlantLayer = new NativeArray<short>(totalCells, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+                    outPlantValue = new NativeArray<byte>(totalCells, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+
+                    var job = new TerrainDetailScatterBurstJobs.DetailScatterJob
+                    {
+                        heights01Flat = heightsFlat,
+                        heightRes = heightRes,
+                        heightStep = Mathf.Max(0.0001f, heightStep),
+                        heightMultiplier = Mathf.Max(0.0001f, heightMultiplier),
+                        waterSurfaceY = waterSurfaceY,
+                        minHeight01 = settings.minHeight01,
+                        maxHeight01 = settings.maxHeight01,
+                        maxSlopeDeg = settings.maxSlopeDeg,
+                        waterExclusionYOffset = settings.waterExclusionYOffset,
+                        detailRes = res,
+                        chunkSizeWorld = chunkSizeWorld,
+                        chunkX = chunkX,
+                        chunkY = chunkY,
+                        seed = seed,
+                        useCoverage = useCoverage,
+                        includeGrass = includeGrass,
+                        grassDensity01 = Mathf.Clamp01(settings.grassDensityPerM2),
+                        grassMaxPerCell = grassMaxPerCell,
+                        grassPerChunk = Mathf.Max(0f, settings.grassPerChunk),
+                        areaScale = areaScale,
+                        chunkArea = chunkArea,
+                        cellArea = cellArea,
+                        grassProtoIdx = grassIdx,
+                        grassCumWeights = grassCum,
+                        includePlants = includePlants,
+                        plantsDensity01 = Mathf.Clamp01(settings.plantsDensityPerM2),
+                        plantsMaxPerCell = plantsMaxPerCell,
+                        plantsPerChunk = Mathf.Max(0f, settings.plantsPerChunk),
+                        plantProtoIdx = plantIdx,
+                        plantCumWeights = plantCum,
+                        outGrassLayer = outGrassLayer,
+                        outGrassValue = outGrassValue,
+                        outPlantLayer = outPlantLayer,
+                        outPlantValue = outPlantValue
+                    };
+
+                    int batch = Mathf.Clamp(jobBatchSize, 16, 1024);
+                    JobHandle h = job.Schedule(totalCells, batch);
+                    h.Complete();
+
+                    // Apply results into per-layer int[,] arrays (main thread).
+                    for (int idx = 0; idx < totalCells; idx++)
+                    {
+                        int y = idx / res;
+                        int x = idx - (y * res);
+
+                        short gl = outGrassLayer[idx];
+                        byte gv = outGrassValue[idx];
+                        if (gv > 0 && gl >= 0 && gl < layerCount)
+                        {
+                            int cur = layers[gl][y, x];
+                            if (gv > cur) layers[gl][y, x] = gv;
+                        }
+
+                        short pl = outPlantLayer[idx];
+                        byte pv = outPlantValue[idx];
+                        if (pv > 0 && pl >= 0 && pl < layerCount)
+                        {
+                            int cur = layers[pl][y, x];
+                            if (pv > cur) layers[pl][y, x] = pv;
+                        }
+                    }
+
+                    // Skip the old CPU loops below.
+                    goto APPLY_LAYERS;
+                }
+                catch
+                {
+                    // Fallback to CPU implementation below if Burst/Jobs fail for any reason.
+                }
+                finally
+                {
+                    if (heightsFlat.IsCreated) heightsFlat.Dispose();
+                    if (grassIdx.IsCreated) grassIdx.Dispose();
+                    if (grassCum.IsCreated) grassCum.Dispose();
+                    if (plantIdx.IsCreated) plantIdx.Dispose();
+                    if (plantCum.IsCreated) plantCum.Dispose();
+                    if (outGrassLayer.IsCreated) outGrassLayer.Dispose();
+                    if (outGrassValue.IsCreated) outGrassValue.Dispose();
+                    if (outPlantLayer.IsCreated) outPlantLayer.Dispose();
+                    if (outPlantValue.IsCreated) outPlantValue.Dispose();
+                }
+            }
 
             for (int y = 0; y < res; y++)
             {
@@ -373,6 +538,7 @@ namespace InfinityTerrain.Vegetation
                 }
             }
 
+        APPLY_LAYERS:
             for (int i = 0; i < layerCount; i++)
             {
                 td.SetDetailLayer(0, 0, i, layers[i]);

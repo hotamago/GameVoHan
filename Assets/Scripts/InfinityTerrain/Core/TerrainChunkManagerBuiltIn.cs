@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using InfinityTerrain.Data;
 using InfinityTerrain.Settings;
 using InfinityTerrain.Utilities;
+using Unity.Collections;
 using UnityEngine;
 
 namespace InfinityTerrain.Core
@@ -41,6 +42,40 @@ namespace InfinityTerrain.Core
         private readonly float _slopeRockEndDeg;
         private readonly float _blendNoiseCellSize;
         private readonly float _blendNoiseStrength;
+
+        // --- Async heightmap generation (prevents main-thread stalls) ---
+        private class PendingHeightmap
+        {
+            public ChunkData chunk;
+            public DesiredChunk desired;
+            public Terrain terrain;
+            public TerrainCollider collider;
+            public TerrainData terrainData;
+            public TerrainGenerator.Heightmap01AsyncTask task;
+        }
+
+        private readonly Dictionary<string, PendingHeightmap> _pendingByKey = new Dictionary<string, PendingHeightmap>(128);
+        private readonly Dictionary<string, DesiredChunk> _queuedRegens = new Dictionary<string, DesiredChunk>(256);
+
+        /// <summary>
+        /// Limits how many GPU async readbacks can be in-flight at once (keeps spikes under control).
+        /// </summary>
+        public int maxAsyncHeightmapsInFlight = 2;
+
+        /// <summary>
+        /// Limits how many new async heightmap tasks can start per frame.
+        /// </summary>
+        public int startAsyncHeightmapsPerFrame = 1;
+
+        /// <summary>
+        /// Limits how many finished async heightmaps are applied to TerrainData per frame.
+        /// </summary>
+        public int applyAsyncHeightmapsPerFrame = 1;
+
+        /// <summary>
+        /// If false, heightmaps are generated synchronously (legacy behavior, can stutter).
+        /// </summary>
+        public bool enableAsyncHeightmapStreaming = true;
 
         public TerrainChunkManagerBuiltIn(
             TerrainSettings terrainSettings,
@@ -201,12 +236,83 @@ namespace InfinityTerrain.Core
 
                 if (needsRegen)
                 {
-                    RegenerateChunk(existing, d);
+                    QueueRegenerateChunk(existing, d);
                 }
                 else
                 {
                     // Still ensure position is correct after floating-origin shifts/teleports
                     UpdateChunkLocalPosition(existing.gameObject, d.minBaseChunkX, d.minBaseChunkY);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Must be called every frame by the owner (e.g., InfinityRenderTerrainChunksBuiltIn).
+        /// Starts a limited number of async heightmap tasks and applies completed ones.
+        /// </summary>
+        public void TickAsyncHeightmaps()
+        {
+            // Clamp configuration defensively
+            int maxInFlight = Mathf.Clamp(maxAsyncHeightmapsInFlight, 0, 64);
+            int startBudget = Mathf.Clamp(startAsyncHeightmapsPerFrame, 0, 64);
+            int applyBudget = Mathf.Clamp(applyAsyncHeightmapsPerFrame, 0, 64);
+
+            // Apply completed first (frees in-flight slots ASAP)
+            if (applyBudget > 0 && _pendingByKey.Count > 0)
+            {
+                var keys = new List<string>(_pendingByKey.Count);
+                foreach (var kvp in _pendingByKey) keys.Add(kvp.Key);
+
+                int applied = 0;
+                for (int i = 0; i < keys.Count && applied < applyBudget; i++)
+                {
+                    string key = keys[i];
+                    if (!_pendingByKey.TryGetValue(key, out PendingHeightmap p) || p == null) continue;
+                    if (p.task == null) { _pendingByKey.Remove(key); continue; }
+                    if (!p.task.IsDone) continue;
+
+                    bool ok = TryApplyCompletedHeightmap(p);
+                    p.task.Dispose();
+                    p.task = null;
+                    _pendingByKey.Remove(key);
+
+                    if (!ok)
+                    {
+                        // Re-queue the desired regen to retry later
+                        _queuedRegens[key] = p.desired;
+                    }
+                    applied++;
+                }
+            }
+
+            // Start new tasks within budget & in-flight cap
+            if (startBudget <= 0 || maxInFlight <= 0) return;
+            int startedCount = 0;
+
+            if (_queuedRegens.Count > 0 && _pendingByKey.Count < maxInFlight)
+            {
+                // We iterate a snapshot to allow removals while starting
+                var keys = new List<string>(_queuedRegens.Count);
+                foreach (var kvp in _queuedRegens) keys.Add(kvp.Key);
+
+                for (int i = 0; i < keys.Count && startedCount < startBudget && _pendingByKey.Count < maxInFlight; i++)
+                {
+                    string key = keys[i];
+                    if (!_queuedRegens.TryGetValue(key, out DesiredChunk d)) continue;
+                    if (!_loadedChunks.TryGetValue(key, out ChunkData chunk) || chunk == null || chunk.gameObject == null)
+                    {
+                        _queuedRegens.Remove(key);
+                        continue;
+                    }
+                    if (_pendingByKey.ContainsKey(key))
+                    {
+                        // Already running; keep latest desired queued so it can regen again if needed
+                        continue;
+                    }
+
+                    bool started = StartAsyncHeightmap(chunk, d);
+                    _queuedRegens.Remove(key);
+                    if (started) startedCount++;
                 }
             }
         }
@@ -247,7 +353,7 @@ namespace InfinityTerrain.Core
 
             _loadedChunks[d.key] = data;
             UpdateChunkLocalPosition(data.gameObject, d.minBaseChunkX, d.minBaseChunkY);
-            RegenerateChunk(data, d);
+            QueueRegenerateChunk(data, d);
         }
 
         private GameObject CreateTerrainGameObject(DesiredChunk d)
@@ -315,9 +421,92 @@ namespace InfinityTerrain.Core
             td.terrainLayers = new[] { _defaultTerrainLayer };
         }
 
-        private void RegenerateChunk(ChunkData data, DesiredChunk d)
+        private void QueueRegenerateChunk(ChunkData data, DesiredChunk d)
         {
             if (data == null || data.gameObject == null) return;
+
+            if (!enableAsyncHeightmapStreaming)
+            {
+                // Legacy synchronous path (kept for debugging / compatibility)
+                RegenerateChunkBlocking(data, d);
+                return;
+            }
+
+            // Cancel any pending task for this key by overwriting the queued desired (latest wins)
+            _queuedRegens[d.key] = d;
+
+            // Clear cached heights immediately if chunk coords changed, so vegetation doesn't use wrong data.
+            if (data.noiseChunkX != d.noiseChunkX || data.noiseChunkY != d.noiseChunkY || data.lodResolution != d.lodResolution)
+            {
+                data.heights01 = null;
+                data.isReady = false;
+            }
+        }
+
+        private void RegenerateChunkBlocking(ChunkData data, DesiredChunk d)
+        {
+            if (data == null || data.gameObject == null) return;
+
+            // Cancel/cleanup async state for this chunk key
+            if (_pendingByKey.TryGetValue(d.key, out PendingHeightmap p) && p != null && p.task != null)
+            {
+                p.task.Dispose();
+            }
+            _pendingByKey.Remove(d.key);
+            _queuedRegens.Remove(d.key);
+
+            Terrain terrain = data.gameObject.GetComponent<Terrain>();
+            TerrainCollider tc = data.gameObject.GetComponent<TerrainCollider>();
+            if (terrain == null) terrain = data.gameObject.AddComponent<Terrain>();
+            if (tc == null) tc = data.gameObject.AddComponent<TerrainCollider>();
+
+            TerrainData td = terrain.terrainData;
+            bool needNewData = (td == null) || td.heightmapResolution != d.lodResolution;
+            if (needNewData)
+            {
+                td = new TerrainData();
+                td.heightmapResolution = d.lodResolution;
+            }
+            td.size = new Vector3(d.chunkSizeWorld, Mathf.Max(0.0001f, _terrainSettings.heightMultiplier), d.chunkSizeWorld);
+            EnsureTerrainLayers(td);
+
+            float[,] heights01 = _terrainGenerator.GenerateHeightmap01GPU(
+                d.noiseChunkX, d.noiseChunkY, d.lodResolution, d.chunkSizeWorld, d.baseVertsPerChunk);
+
+            if (heights01 == null)
+            {
+                data.isReady = false;
+                data.heights01 = null;
+                return;
+            }
+
+            td.SetHeights(0, 0, heights01);
+            data.heights01 = heights01;
+
+            if (_enableAutoSplatmap && td.terrainLayers != null && td.terrainLayers.Length >= 2 && _materialSettings != null)
+            {
+                ApplyAutoSplatmap(td, heights01, d.noiseChunkX, d.noiseChunkY, d.chunkSizeWorld);
+            }
+
+            terrain.terrainData = td;
+            tc.terrainData = td;
+            tc.enabled = d.wantCollider;
+            ApplyTerrainRuntimeSettings(terrain);
+            terrain.Flush();
+
+            data.isReady = true;
+            data.lodResolution = d.lodResolution;
+            data.isSuperChunk = d.isSuper;
+            data.superScale = d.superScale;
+            data.noiseChunkX = d.noiseChunkX;
+            data.noiseChunkY = d.noiseChunkY;
+            data.baseVertsPerChunk = d.baseVertsPerChunk;
+            data.chunkSizeWorld = d.chunkSizeWorld;
+        }
+
+        private bool StartAsyncHeightmap(ChunkData data, DesiredChunk d)
+        {
+            if (data == null || data.gameObject == null) return false;
 
             Terrain terrain = data.gameObject.GetComponent<Terrain>();
             TerrainCollider tc = data.gameObject.GetComponent<TerrainCollider>();
@@ -335,45 +524,82 @@ namespace InfinityTerrain.Core
             td.size = new Vector3(d.chunkSizeWorld, Mathf.Max(0.0001f, _terrainSettings.heightMultiplier), d.chunkSizeWorld);
             EnsureTerrainLayers(td);
 
-            // Generate heights (0..1)
-            float[,] heights01 = _terrainGenerator.GenerateHeightmap01GPU(
-                d.noiseChunkX, d.noiseChunkY, d.lodResolution, d.chunkSizeWorld, d.baseVertsPerChunk);
-
-            if (heights01 == null)
-            {
-                data.isReady = false;
-                return;
-            }
-
-            // Apply to TerrainData (compatible across Unity versions)
-            // NOTE: Some Unity versions support SetHeightsDelayLOD, but ApplyDelayedHeightmapModification
-            // is not available everywhere. Use SetHeights for maximum compatibility.
-            td.SetHeights(0, 0, heights01);
-
-            // Cache heights for vegetation (prevents expensive re-generation + GPU readback stutters)
-            data.heights01 = heights01;
-
-            // Optional runtime texture splatmap based on height/slope/noise (multiple TerrainLayers needed).
-            if (_enableAutoSplatmap && td.terrainLayers != null && td.terrainLayers.Length >= 2 && _materialSettings != null)
-            {
-                ApplyAutoSplatmap(td, heights01, d.noiseChunkX, d.noiseChunkY, d.chunkSizeWorld);
-            }
-
+            // Assign now (so the terrain exists immediately, even if heights arrive next frames)
             terrain.terrainData = td;
             tc.terrainData = td;
             tc.enabled = d.wantCollider;
+            ApplyTerrainRuntimeSettings(terrain);
+
+            // Start async task
+            TerrainGenerator.Heightmap01AsyncTask task = _terrainGenerator.BeginGenerateHeightmap01GPUAsync(
+                d.noiseChunkX, d.noiseChunkY, d.lodResolution, d.chunkSizeWorld, d.baseVertsPerChunk);
+
+            if (task == null)
+            {
+                data.isReady = false;
+                return false;
+            }
+
+            data.isReady = false;
+            data.heights01 = null;
+
+            _pendingByKey[d.key] = new PendingHeightmap
+            {
+                chunk = data,
+                desired = d,
+                terrain = terrain,
+                collider = tc,
+                terrainData = td,
+                task = task
+            };
+
+            return true;
+        }
+
+        private bool TryApplyCompletedHeightmap(PendingHeightmap p)
+        {
+            if (p == null || p.chunk == null || p.chunk.gameObject == null) return false;
+            if (p.task == null) return false;
+            if (p.task.HasError) return false;
+
+            TerrainData td = p.terrainData;
+            Terrain terrain = p.terrain != null ? p.terrain : p.chunk.gameObject.GetComponent<Terrain>();
+            TerrainCollider tc = p.collider != null ? p.collider : p.chunk.gameObject.GetComponent<TerrainCollider>();
+            if (terrain == null || td == null) return false;
+
+            // Convert pixels -> float[,] and apply
+            NativeArray<float> pixels = p.task.GetData();
+            float[,] heights01 = TerrainGenerator.ConvertReadbackToHeights01(pixels, p.task.resolution, _terrainSettings.heightMultiplier);
+            if (heights01 == null) return false;
+
+            td.SetHeights(0, 0, heights01);
+
+            // Cache heights for vegetation/VFX
+            p.chunk.heights01 = heights01;
+
+            // Optional runtime texture splatmap based on height/slope/noise
+            if (_enableAutoSplatmap && td.terrainLayers != null && td.terrainLayers.Length >= 2 && _materialSettings != null)
+            {
+                ApplyAutoSplatmap(td, heights01, p.desired.noiseChunkX, p.desired.noiseChunkY, p.desired.chunkSizeWorld);
+            }
+
+            terrain.terrainData = td;
+            if (tc != null) tc.terrainData = td;
+            if (tc != null) tc.enabled = p.desired.wantCollider;
 
             ApplyTerrainRuntimeSettings(terrain);
             terrain.Flush();
 
-            data.isReady = true;
-            data.lodResolution = d.lodResolution;
-            data.isSuperChunk = d.isSuper;
-            data.superScale = d.superScale;
-            data.noiseChunkX = d.noiseChunkX;
-            data.noiseChunkY = d.noiseChunkY;
-            data.baseVertsPerChunk = d.baseVertsPerChunk;
-            data.chunkSizeWorld = d.chunkSizeWorld;
+            p.chunk.isReady = true;
+            p.chunk.lodResolution = p.desired.lodResolution;
+            p.chunk.isSuperChunk = p.desired.isSuper;
+            p.chunk.superScale = p.desired.superScale;
+            p.chunk.noiseChunkX = p.desired.noiseChunkX;
+            p.chunk.noiseChunkY = p.desired.noiseChunkY;
+            p.chunk.baseVertsPerChunk = p.desired.baseVertsPerChunk;
+            p.chunk.chunkSizeWorld = p.desired.chunkSizeWorld;
+
+            return true;
         }
 
         private void UpdateChunkLocalPosition(GameObject chunkObj, long minBaseChunkX, long minBaseChunkY)
@@ -389,12 +615,24 @@ namespace InfinityTerrain.Core
             if (_loadedChunks.TryGetValue(key, out ChunkData data))
             {
                 _loadedChunks.Remove(key);
+                if (_pendingByKey.TryGetValue(key, out PendingHeightmap p) && p != null && p.task != null)
+                {
+                    p.task.Dispose();
+                }
+                _pendingByKey.Remove(key);
+                _queuedRegens.Remove(key);
                 ReturnToPool(data);
             }
         }
 
         public void ClearAllChunks()
         {
+            foreach (var kvp in _pendingByKey)
+            {
+                if (kvp.Value != null && kvp.Value.task != null) kvp.Value.task.Dispose();
+            }
+            _pendingByKey.Clear();
+            _queuedRegens.Clear();
             foreach (var kvp in _loadedChunks)
             {
                 ReturnToPool(kvp.Value);

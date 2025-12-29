@@ -149,6 +149,20 @@ namespace InfinityTerrain
         [Tooltip("REQUIRED: Assign TerrainGen.compute from Assets/Resources/Shaders/ folder directly in Inspector.")]
         [SerializeField] private ComputeShader terrainComputeShader;
 
+        [Header("Async Heightmap Streaming (Anti-Stutter)")]
+        [Tooltip("If enabled, Terrain heightmaps are generated with AsyncGPUReadback without blocking the main thread. " +
+                 "Chunks will appear/finish over a few frames instead of stuttering.")]
+        [SerializeField] private bool enableAsyncHeightmapStreaming = true;
+
+        [Tooltip("Max number of heightmap GPU readbacks allowed at once.")]
+        [SerializeField] private int asyncHeightmapsMaxInFlight = 2;
+
+        [Tooltip("How many new heightmap readbacks can start per frame.")]
+        [SerializeField] private int asyncHeightmapsStartPerFrame = 1;
+
+        [Tooltip("How many completed heightmaps can be applied to TerrainData per frame.")]
+        [SerializeField] private int asyncHeightmapsApplyPerFrame = 1;
+
         // Settings objects
         private TerrainSettings _terrainSettings;
         private MaterialSettings _materialSettings;
@@ -321,6 +335,12 @@ namespace InfinityTerrain
                 blendNoiseCellSize: blendNoiseCellSize,
                 blendNoiseStrength: blendNoiseStrength);
 
+            // Async heightmap streaming configuration
+            _terrainChunkManager.enableAsyncHeightmapStreaming = enableAsyncHeightmapStreaming;
+            _terrainChunkManager.maxAsyncHeightmapsInFlight = Mathf.Max(0, asyncHeightmapsMaxInFlight);
+            _terrainChunkManager.startAsyncHeightmapsPerFrame = Mathf.Max(0, asyncHeightmapsStartPerFrame);
+            _terrainChunkManager.applyAsyncHeightmapsPerFrame = Mathf.Max(0, asyncHeightmapsApplyPerFrame);
+
             _waterManager = new WaterManager(_waterSettings, _terrainSettings, _materialSettings, _worldOriginManager, transform);
             _waterManager.EnsureWaterMaterialLoaded();
 
@@ -393,7 +413,14 @@ namespace InfinityTerrain
             current_x = pX;
             current_y = pZ;
 
+            // Keep runtime-configurable (OnValidate in play mode can change inspector values)
+            _terrainChunkManager.enableAsyncHeightmapStreaming = enableAsyncHeightmapStreaming;
+            _terrainChunkManager.maxAsyncHeightmapsInFlight = Mathf.Max(0, asyncHeightmapsMaxInFlight);
+            _terrainChunkManager.startAsyncHeightmapsPerFrame = Mathf.Max(0, asyncHeightmapsStartPerFrame);
+            _terrainChunkManager.applyAsyncHeightmapsPerFrame = Mathf.Max(0, asyncHeightmapsApplyPerFrame);
+
             _terrainChunkManager.UpdateChunks(pX, pZ);
+            if (enableAsyncHeightmapStreaming) _terrainChunkManager.TickAsyncHeightmaps();
             _waterManager.UpdateWaterTiles(pX, pZ);
 
             if (enableTerrainTrees)
