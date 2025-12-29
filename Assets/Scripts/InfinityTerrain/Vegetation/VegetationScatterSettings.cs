@@ -24,25 +24,33 @@ namespace InfinityTerrain.Vegetation
         [Min(0)] public int grassPerChunk = 60;
 
         [Header("Density (optional, per m²)")]
-        [Tooltip("If > 0, Plants will be spawned using a probability/density approach instead of a fixed per-chunk count.")]
+        [Tooltip("If > 0, Plants will be spawned using a probability/density approach instead of a fixed per-chunk count.\n" +
+                 "NOTE (Terrain Details): when using built-in Terrain detail layers, these values are treated as a normalized intensity (0..1):\n" +
+                 "- CoverageMode: 1.0 => 255 coverage\n" +
+                 "- InstanceCountMode: 1.0 => 16 instances per cell")]
         [Min(0f)] public float plantsDensityPerM2 = 0f;
-        [Tooltip("If > 0, Grass will be spawned using a probability/density approach instead of a fixed per-chunk count.")]
+        [Tooltip("If > 0, Grass will be spawned using a probability/density approach instead of a fixed per-chunk count.\n" +
+                 "NOTE (Terrain Details): when using built-in Terrain detail layers, these values are treated as a normalized intensity (0..1):\n" +
+                 "- CoverageMode: 1.0 => 255 coverage\n" +
+                 "- InstanceCountMode: 1.0 => 16 instances per cell")]
         [Min(0f)] public float grassDensityPerM2 = 0f;
 
-        [Header("Density Safety Caps (base chunk ~100x100)")]
-        [Tooltip("Upper limit to prevent extreme densities from tanking FPS. Scales with chunk area like other budgets.")]
-        [Min(0)] public int maxPlantsPerChunk = 2500;
-        [Tooltip("Upper limit to prevent extreme densities from tanking FPS. Scales with chunk area like other budgets.")]
-        [Min(0)] public int maxGrassPerChunk = 6000;
-
         [Header("Terrain Detail Layers (Built-in Terrain)")]
+        [Tooltip("Unity 2022.2+: Use Terrain DetailScatterMode.CoverageMode (0..255) instead of InstanceCountMode (0..16). " +
+                 "CoverageMode is generally more scalable for high-density detail rendering.")]
+        public bool terrainDetailsUseCoverageMode = true;
+
         [Tooltip("Detail map resolution per chunk. Higher = denser/finer, but slower to generate. Typical: 128..512.")]
         [Range(32, 1024)] public int terrainDetailResolution = 256;
         [Tooltip("Detail resolution per patch. Typical: 8..32.")]
         [Range(4, 64)] public int terrainDetailResolutionPerPatch = 16;
-        [Tooltip("Max number of Grass details per cell (prevents crazy overdraw).")]
+        [Tooltip("InstanceCountMode: max number of Grass details per cell (0..16). " +
+                 "NOTE: If 'grassDensityPerM2' > 0, Terrain details use the density normalized mapping and this cap is ignored.\n" +
+                 "CoverageMode: this is used as a generation cap and mapped to 0..255 coverage values.")]
         [Range(0, 16)] public int grassMaxPerCell = 4;
-        [Tooltip("Max number of Plant details per cell (prevents crazy overdraw).")]
+        [Tooltip("InstanceCountMode: max number of Plant details per cell (0..16). " +
+                 "NOTE: If 'plantsDensityPerM2' > 0, Terrain details use the density normalized mapping and this cap is ignored.\n" +
+                 "CoverageMode: this is used as a generation cap and mapped to 0..255 coverage values.")]
         [Range(0, 16)] public int plantsMaxPerCell = 2;
 
         [Header("Min Spacing (meters)")]

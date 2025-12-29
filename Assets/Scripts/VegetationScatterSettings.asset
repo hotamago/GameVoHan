@@ -18,26 +18,25 @@ MonoBehaviour:
   maxSlopeDeg: 35.5
   waterExclusionYOffset: 0.5
   treesPerChunk: 50
-  rocksPerChunk: 22
-  plantsPerChunk: 97
-  grassPerChunk: 44
-  plantsDensityPerM2: 0.2
-  grassDensityPerM2: 0.6
-  maxPlantsPerChunk: 6786
-  maxGrassPerChunk: 7523
-  terrainDetailResolution: 256
+  rocksPerChunk: 20
+  plantsPerChunk: 0
+  grassPerChunk: 0
+  plantsDensityPerM2: 0.02
+  grassDensityPerM2: 0.1
+  terrainDetailsUseCoverageMode: 0
+  terrainDetailResolution: 128
   terrainDetailResolutionPerPatch: 16
-  grassMaxPerCell: 4
-  plantsMaxPerCell: 3
-  treeMinSpacing: 2
+  grassMaxPerCell: 3
+  plantsMaxPerCell: 2
+  treeMinSpacing: 3
   rockMinSpacing: 5
   plantMinSpacing: 0.2
   grassMinSpacing: 0.09
   attemptsPerSpawn: 5
   enableTreeClustering: 1
-  treeClusterCellSize: 119.96
-  treeClusterThreshold: 0.471
-  treeClusterSharpness: 1.59
+  treeClusterCellSize: 115.56
+  treeClusterThreshold: 0.626
+  treeClusterSharpness: 2.36
   createColliderProxies: 1
   autoGenerateColliderWhenMissing: 1
   prefabs:

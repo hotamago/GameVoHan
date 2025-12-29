@@ -237,10 +237,9 @@ namespace InfinityTerrain.Vegetation
             // Visual only for Plants and Grass
             if (settings.plantsDensityPerM2 > 0f)
             {
-                int cap = Mathf.RoundToInt(settings.maxPlantsPerChunk * areaScale);
                 SpawnCategoryDensityInstanced(
                     mc, canSampleMesh, verts, norms, lodResolution,
-                    seed ^ 0x66778899, plants, settings.plantsDensityPerM2, cap, settings.plantMinSpacing, chunkSize, false);
+                    seed ^ 0x66778899, plants, settings.plantsDensityPerM2, settings.plantMinSpacing, chunkSize, false);
             }
             else
             {
@@ -251,10 +250,9 @@ namespace InfinityTerrain.Vegetation
 
             if (settings.grassDensityPerM2 > 0f)
             {
-                int cap = Mathf.RoundToInt(settings.maxGrassPerChunk * areaScale);
                 SpawnCategoryDensityInstanced(
                     mc, canSampleMesh, verts, norms, lodResolution,
-                    seed ^ 0x13579BDF, grass, settings.grassDensityPerM2, cap, settings.grassMinSpacing, chunkSize, false);
+                    seed ^ 0x13579BDF, grass, settings.grassDensityPerM2, settings.grassMinSpacing, chunkSize, false);
             }
             else
             {
@@ -355,7 +353,6 @@ namespace InfinityTerrain.Vegetation
             int seed,
             List<VegetationPrefabEntry> entries,
             float densityPerM2,
-            int maxPerChunk,
             float minSpacing,
             float chunkSize,
             bool createColliders,
@@ -369,7 +366,6 @@ namespace InfinityTerrain.Vegetation
             // Instead, convert density -> expected count, clamp, and use random sampling attempts.
             float area = chunkSize * chunkSize;
             int target = Mathf.RoundToInt(densityPerM2 * area);
-            if (maxPerChunk > 0) target = Mathf.Min(target, maxPerChunk);
             if (target <= 0) return;
 
             System.Random rng = new System.Random(seed);

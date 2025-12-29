@@ -36,6 +36,7 @@ namespace InfinityTerrain.Vegetation
         private static bool _scatterModeCached;
         private static MethodInfo _setDetailScatterModeMethod;
         private static object _instanceCountModeValue;
+        private static object _coverageModeValue;
         private static readonly object[] _scatterModeArgs = new object[1];
 
         private static void TryCacheDetailScatterModeApi()
@@ -56,6 +57,8 @@ namespace InfinityTerrain.Vegetation
                 if (enumType != null)
                 {
                     _instanceCountModeValue = Enum.Parse(enumType, "InstanceCountMode");
+                    // Unity 2022.2+: CoverageMode uses 0..255 values in detail maps.
+                    _coverageModeValue = Enum.Parse(enumType, "CoverageMode");
                 }
 
                 _setDetailScatterModeMethod = typeof(TerrainData).GetMethod(
@@ -66,7 +69,21 @@ namespace InfinityTerrain.Vegetation
             {
                 _setDetailScatterModeMethod = null;
                 _instanceCountModeValue = null;
+                _coverageModeValue = null;
             }
+        }
+
+        private static void TrySetDetailScatterMode(TerrainData td, bool useCoverageMode)
+        {
+            if (td == null) return;
+            TryCacheDetailScatterModeApi();
+            if (_setDetailScatterModeMethod == null) return;
+
+            object modeValue = useCoverageMode ? _coverageModeValue : _instanceCountModeValue;
+            if (modeValue == null) return;
+
+            _scatterModeArgs[0] = modeValue;
+            _setDetailScatterModeMethod.Invoke(td, _scatterModeArgs);
         }
 
         public void Clear()
@@ -179,18 +196,13 @@ namespace InfinityTerrain.Vegetation
                 }
             }
 
-            // Quan trọng: đảm bảo map int[,] được hiểu là "số lượng instance" (0..16)
-            // Unity 2022.2+ có DetailScatterMode: InstanceCountMode (0..16) vs CoverageMode (0..255)
-            // Code đang tạo count kiểu 0..16, nên phải ép về InstanceCountMode
+            // Unity 2022.2+: pick scatter mode so int[,] values are interpreted correctly.
+            // - InstanceCountMode => 0..16 per-cell instance count
+            // - CoverageMode      => 0..255 per-cell coverage
             try
             {
-                TryCacheDetailScatterModeApi();
-
-                if (_setDetailScatterModeMethod != null && _instanceCountModeValue != null)
-                {
-                    _scatterModeArgs[0] = _instanceCountModeValue;
-                    _setDetailScatterModeMethod.Invoke(td, _scatterModeArgs);
-                }
+                bool useCoverageMode = settings != null && settings.terrainDetailsUseCoverageMode;
+                TrySetDetailScatterMode(td, useCoverageMode);
             }
             catch
             {
@@ -237,19 +249,7 @@ namespace InfinityTerrain.Vegetation
             float areaScale = chunkArea / (100f * 100f);
             if (areaScale < 0.01f) areaScale = 0.01f;
 
-            float grassLambda = ComputeLambdaPerCell(
-                settings.grassDensityPerM2,
-                settings.grassPerChunk * areaScale,
-                settings.maxGrassPerChunk * areaScale,
-                chunkArea,
-                cellArea);
-
-            float plantsLambda = ComputeLambdaPerCell(
-                settings.plantsDensityPerM2,
-                settings.plantsPerChunk * areaScale,
-                settings.maxPlantsPerChunk * areaScale,
-                chunkArea,
-                cellArea);
+            bool useCoverage = settings != null && settings.terrainDetailsUseCoverageMode;
 
             int grassMaxPerCell = includeGrass ? Mathf.Clamp(settings.grassMaxPerCell, 0, 16) : 0;
             int plantsMaxPerCell = includePlants ? Mathf.Clamp(settings.plantsMaxPerCell, 0, 16) : 0;
@@ -265,22 +265,101 @@ namespace InfinityTerrain.Vegetation
 
                     if (!PassPlacementFilters(heights01, localX, localZ, heightStep, out _)) continue;
 
-                    if (grassProtoIdx.Count > 0 && grassMaxPerCell > 0 && grassLambda > 0f)
+                    if (useCoverage)
+                    {
+                        // CoverageMode: interpret density fields as normalized intensity (0..1) -> 0..255 coverage
+                        if (grassProtoIdx.Count > 0 && settings.grassDensityPerM2 > 0f)
+                        {
+                            float rCov = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ 0x13579BDF));
+                            int cov = SampleValue01ToInt(settings.grassDensityPerM2, 255, rCov);
+                            if (cov > 0)
+                            {
+                                float rPick = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ 0x2468ACE0));
+                                int layer = PickWeightedIndex(rPick, grassProtoIdx, grassWeights);
+                                if ((uint)layer < (uint)layerCount) layers[layer][y, x] = cov;
+                            }
+                        }
+
+                        if (plantProtoIdx.Count > 0 && settings.plantsDensityPerM2 > 0f)
+                        {
+                            float rCov = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ 0x66778899));
+                            int cov = SampleValue01ToInt(settings.plantsDensityPerM2, 255, rCov);
+                            if (cov > 0)
+                            {
+                                float rPick = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ unchecked((int)0x99AABBCC)));
+                                int layer = PickWeightedIndex(rPick, plantProtoIdx, plantWeights);
+                                if ((uint)layer < (uint)layerCount)
+                                {
+                                    layers[layer][y, x] = Mathf.Max(layers[layer][y, x], cov);
+                                }
+                            }
+                        }
+
+                        continue;
+                    }
+
+                    // InstanceCountMode:
+                    // - if density > 0 => treat density as normalized intensity (0..1) -> 0..16 instances per cell (no extra cap)
+                    // - else => fallback to legacy per-chunk budgets (capped by *MaxPerCell)
+                    if (grassProtoIdx.Count > 0)
                     {
                         float rCount = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ 0x13579BDF));
-                        int count = SampleCount(grassLambda, grassMaxPerCell, rCount);
+
+                        int count;
+                        if (settings.grassDensityPerM2 > 0f)
+                        {
+                            // 1.0 => 16
+                            count = SampleValue01ToInt(settings.grassDensityPerM2, 16, rCount);
+                        }
+                        else
+                        {
+                            if (grassMaxPerCell <= 0) count = 0;
+                            else
+                            {
+                            float grassLambda = ComputeLambdaPerCell(
+                                0f,
+                                settings.grassPerChunk * areaScale,
+                                chunkArea,
+                                cellArea);
+                            count = SampleCount(grassLambda, grassMaxPerCell, rCount);
+                            }
+                        }
+
                         if (count > 0)
                         {
                             float rPick = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ 0x2468ACE0));
                             int layer = PickWeightedIndex(rPick, grassProtoIdx, grassWeights);
-                            if ((uint)layer < (uint)layerCount) layers[layer][y, x] = count;
+                            if ((uint)layer < (uint)layerCount)
+                            {
+                                layers[layer][y, x] = count;
+                            }
                         }
                     }
 
-                    if (plantProtoIdx.Count > 0 && plantsMaxPerCell > 0 && plantsLambda > 0f)
+                    if (plantProtoIdx.Count > 0)
                     {
                         float rCount = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ 0x66778899));
-                        int count = SampleCount(plantsLambda, plantsMaxPerCell, rCount);
+
+                        int count;
+                        if (settings.plantsDensityPerM2 > 0f)
+                        {
+                            // 1.0 => 16
+                            count = SampleValue01ToInt(settings.plantsDensityPerM2, 16, rCount);
+                        }
+                        else
+                        {
+                            if (plantsMaxPerCell <= 0) count = 0;
+                            else
+                            {
+                            float plantsLambda = ComputeLambdaPerCell(
+                                0f,
+                                settings.plantsPerChunk * areaScale,
+                                chunkArea,
+                                cellArea);
+                            count = SampleCount(plantsLambda, plantsMaxPerCell, rCount);
+                            }
+                        }
+
                         if (count > 0)
                         {
                             float rPick = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ unchecked((int)0x99AABBCC)));
@@ -569,7 +648,7 @@ namespace InfinityTerrain.Vegetation
             return true;
         }
 
-        private static float ComputeLambdaPerCell(float densityPerM2, float perChunkTarget, float perChunkCap, float chunkArea, float cellArea)
+        private static float ComputeLambdaPerCell(float densityPerM2, float perChunkTarget, float chunkArea, float cellArea)
         {
             if (chunkArea <= 0.0001f || cellArea <= 0.0001f) return 0f;
 
@@ -577,18 +656,28 @@ namespace InfinityTerrain.Vegetation
             if (densityPerM2 > 0f)
             {
                 total = densityPerM2 * chunkArea;
-                if (perChunkCap > 0f) total = Mathf.Min(total, perChunkCap);
             }
             else
             {
                 total = Mathf.Max(0f, perChunkTarget);
-                if (perChunkCap > 0f) total = Mathf.Min(total, perChunkCap);
             }
 
             float effectiveDensity = total / chunkArea;
             return effectiveDensity * cellArea;
         }
 
+        private static int SampleValue01ToInt(float value, int maxInclusive, float r01)
+        {
+            if (maxInclusive <= 0) return 0;
+            float v01 = Mathf.Clamp01(value);
+            float scaled = v01 * maxInclusive;
+            int baseV = Mathf.FloorToInt(scaled);
+            float frac = scaled - baseV;
+            int v = baseV + ((r01 < frac) ? 1 : 0);
+            if (v < 0) return 0;
+            if (v > maxInclusive) return maxInclusive;
+            return v;
+        }
         private static int SampleCount(float lambda, int maxPerCell, float r01)
         {
             if (maxPerCell <= 0) return 0;
@@ -695,6 +784,7 @@ namespace InfinityTerrain.Vegetation
                 h = (h * 31) ^ Mathf.RoundToInt(s.maxHeight01 * 10000f);
                 h = (h * 31) ^ Mathf.RoundToInt(s.maxSlopeDeg * 100f);
                 h = (h * 31) ^ Mathf.RoundToInt(s.waterExclusionYOffset * 100f);
+                h = (h * 31) ^ s.terrainDetailsUseCoverageMode.GetHashCode();
                 h = (h * 31) ^ s.terrainDetailResolution;
                 h = (h * 31) ^ s.terrainDetailResolutionPerPatch;
                 h = (h * 31) ^ s.grassMaxPerCell;
@@ -703,8 +793,6 @@ namespace InfinityTerrain.Vegetation
                 h = (h * 31) ^ s.grassPerChunk;
                 h = (h * 31) ^ Mathf.RoundToInt(s.plantsDensityPerM2 * 10000f);
                 h = (h * 31) ^ Mathf.RoundToInt(s.grassDensityPerM2 * 10000f);
-                h = (h * 31) ^ s.maxPlantsPerChunk;
-                h = (h * 31) ^ s.maxGrassPerChunk;
 
                 if (s.prefabs != null)
                 {

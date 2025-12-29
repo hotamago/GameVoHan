@@ -531,7 +531,7 @@ MonoBehaviour:
   erosionStrength: 0.2
   domainWarpStrength: 2
   enableWaterTiles: 1
-  waterMaterialOverride: {fileID: 2100000, guid: 1eed8c0c756ddc74a9c71c5d204fd2de, type: 2}
+  waterMaterialOverride: {fileID: 2100000, guid: 8759ec410a6774b4ea13ae32dc2b8d2e, type: 2}
   waterMaterialResourceName: Ocean
   waterRenderDistanceOverride: 0
   waterEnableLod: 1

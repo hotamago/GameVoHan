@@ -166,10 +166,9 @@ namespace InfinityTerrain.Vegetation
             {
                 if (settings.plantsDensityPerM2 > 0f)
                 {
-                    int cap = Mathf.RoundToInt(settings.maxPlantsPerChunk * areaScale);
                     SpawnDensityCategory(
                         terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
-                        plantEntries, settings.plantsDensityPerM2, cap, settings.plantMinSpacing, instances, enableClustering: false);
+                        plantEntries, settings.plantsDensityPerM2, settings.plantMinSpacing, instances, enableClustering: false);
                 }
                 else
                 {
@@ -184,10 +183,9 @@ namespace InfinityTerrain.Vegetation
             {
                 if (settings.grassDensityPerM2 > 0f)
                 {
-                    int cap = Mathf.RoundToInt(settings.maxGrassPerChunk * areaScale);
                     SpawnDensityCategory(
                         terrain, td, rng, chunkSizeWorld, heights01, step, invChunk,
-                        grassEntries, settings.grassDensityPerM2, cap, settings.grassMinSpacing, instances, enableClustering: false);
+                        grassEntries, settings.grassDensityPerM2, settings.grassMinSpacing, instances, enableClustering: false);
                 }
                 else
                 {
@@ -278,7 +276,6 @@ namespace InfinityTerrain.Vegetation
             float invChunk,
             List<VegetationPrefabEntry> entries,
             float densityPerM2,
-            int maxPerChunk,
             float minSpacing,
             List<TreeInstance> instances,
             bool enableClustering)
@@ -289,7 +286,6 @@ namespace InfinityTerrain.Vegetation
 
             float area = chunkSizeWorld * chunkSizeWorld;
             int target = Mathf.RoundToInt(densityPerM2 * area);
-            if (maxPerChunk > 0) target = Mathf.Min(target, maxPerChunk);
             if (target <= 0) return;
 
             int attempts = Mathf.Max(target * settings.attemptsPerSpawn, target);
