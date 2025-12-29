@@ -4,6 +4,7 @@
 #pragma kernel SmoothHeightmap
 #pragma kernel CalculateNormals
 #pragma kernel GenerateMesh
+#pragma kernel GenerateSplatmap
 
 // --- Inputs ---
 // 64-bit chunk coordinates (two's complement) passed as uint hi/lo parts.
@@ -411,5 +412,188 @@ void GenerateMesh (uint3 id : SV_DispatchThreadID)
         Triangles[triIndex + 4] = index + resolution;
         Triangles[triIndex + 5] = index + resolution + 1;
     }
+}
+
+// --- Splatmap Generation (GPU-accelerated alphamap) ---
+// Input heightmap texture
+Texture2D<float> HeightMapInput;
+// Output splatmap: RGBA = beach/grass/rock/snow weights
+RWTexture2D<float4> SplatmapOutput;
+
+// Splatmap parameters
+float splatWaterLevel;
+float splatBeachLevel;
+float splatGrassLevel;
+float splatRockLevel;
+float splatSnowLevel;
+float splatSlopeRockStartDeg;
+float splatSlopeRockEndDeg;
+float splatBlendNoiseCellSize;
+float splatBlendNoiseStrength;
+float splatHeightMultiplier;
+float splatChunkSizeWorld;
+int splatmapResolution;
+int splatHeightmapResolution;
+int splatmapSeed;
+
+// Value noise for splatmap blending (simplified version matching VegetationNoise.ValueNoise2D)
+float ValueNoise2D_Splatmap(uint2 gx, uint2 gz, float cellSize, int seed)
+{
+    if (cellSize <= 0.0001) return 0.5;
+    
+    // Convert 64-bit grid coords to world coords, then to cell coords
+    // We approximate by using the low 32 bits for cell calculation
+    // This matches the CPU implementation which uses doubles
+    float gxf = (float)gx.x;
+    float gzf = (float)gz.x;
+    
+    // Scale by cell size (inverse)
+    float cellInv = 1.0 / max(cellSize, 0.0001);
+    float fx = gxf * cellInv;
+    float fz = gzf * cellInv;
+    
+    int x0 = (int)floor(fx);
+    int z0 = (int)floor(fz);
+    int x1 = x0 + 1;
+    int z1 = z0 + 1;
+    
+    float ux = fx - x0;
+    float uz = fz - z0;
+    ux = saturate(ux);
+    uz = saturate(uz);
+    
+    // Smoothstep interpolation
+    float u = ux * ux * (3.0 - 2.0 * ux);
+    float v = uz * uz * (3.0 - 2.0 * uz);
+    
+    // Hash corners (matching VegetationNoise.Hash2D)
+    uint salt = Hash32((uint)seed ^ 0xA341316Cu);
+    uint h00 = Hash32(salt ^ (uint)x0);
+    h00 = Hash32(h00 ^ (uint)z0);
+    uint h10 = Hash32(salt ^ (uint)x1);
+    h10 = Hash32(h10 ^ (uint)z0);
+    uint h01 = Hash32(salt ^ (uint)x0);
+    h01 = Hash32(h01 ^ (uint)z1);
+    uint h11 = Hash32(salt ^ (uint)x1);
+    h11 = Hash32(h11 ^ (uint)z1);
+    
+    float a = HashTo01(h00);
+    float b = HashTo01(h10);
+    float c = HashTo01(h01);
+    float d = HashTo01(h11);
+    
+    return lerp(lerp(a, b, u), lerp(c, d, u), v);
+}
+
+float SampleHeightBilinear(Texture2D<float> heightMap, float u, float v, int res)
+{
+    if (res <= 1) return heightMap.Load(int3(0, 0, 0)).r;
+    
+    float fx = clamp(u * (res - 1), 0.0, res - 1.001);
+    float fz = clamp(v * (res - 1), 0.0, res - 1.001);
+    
+    int x0 = (int)floor(fx);
+    int z0 = (int)floor(fz);
+    int x1 = min(res - 1, x0 + 1);
+    int z1 = min(res - 1, z0 + 1);
+    
+    float tx = fx - x0;
+    float tz = fz - z0;
+    
+    float a = heightMap.Load(int3(x0, z0, 0)).r;
+    float b = heightMap.Load(int3(x1, z0, 0)).r;
+    float c = heightMap.Load(int3(x0, z1, 0)).r;
+    float d = heightMap.Load(int3(x1, z1, 0)).r;
+    
+    return saturate(lerp(lerp(a, b, tx), lerp(c, d, tx), tz));
+}
+
+float SampleSlopeDeg(Texture2D<float> heightMap, float u, float v, int res, float heightMult, float chunkSize)
+{
+    if (res <= 2) return 0.0;
+    
+    float fx = u * (res - 1);
+    float fz = v * (res - 1);
+    int ix = clamp((int)round(fx), 1, res - 2);
+    int iz = clamp((int)round(fz), 1, res - 2);
+    
+    float step = chunkSize / max(1.0, res - 1);
+    
+    float hL = heightMap.Load(int3(ix - 1, iz, 0)).r * heightMult;
+    float hR = heightMap.Load(int3(ix + 1, iz, 0)).r * heightMult;
+    float hD = heightMap.Load(int3(ix, iz - 1, 0)).r * heightMult;
+    float hU = heightMap.Load(int3(ix, iz + 1, 0)).r * heightMult;
+    
+    float dx = (hR - hL) / (2.0 * max(0.0001, step));
+    float dz = (hU - hD) / (2.0 * max(0.0001, step));
+    
+    float3 n = normalize(float3(-dx, 1.0, -dz));
+    return degrees(acos(dot(n, float3(0, 1, 0))));
+}
+
+float SmoothStep01_Splatmap(float x, float a, float b)
+{
+    if (abs(a - b) < 1e-6) return x >= b ? 1.0 : 0.0;
+    float t = saturate((x - a) / (b - a));
+    return t * t * (3.0 - 2.0 * t);
+}
+
+float SmoothBand_Splatmap(float x, float a, float b)
+{
+    float up = SmoothStep01_Splatmap(x, a, b);
+    float down = 1.0 - SmoothStep01_Splatmap(x, b, b + 0.08);
+    return saturate(up * down);
+}
+
+[numthreads(8, 8, 1)]
+void GenerateSplatmap(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)splatmapResolution || id.y >= (uint)splatmapResolution) return;
+    
+    float u = (splatmapResolution <= 1) ? 0.0 : (float)id.x / (splatmapResolution - 1);
+    float v = (splatmapResolution <= 1) ? 0.0 : (float)id.y / (splatmapResolution - 1);
+    
+    // Sample height from heightmap (normalized 0-1)
+    float h01 = SampleHeightBilinear(HeightMapInput, u, v, splatHeightmapResolution);
+    
+    // Calculate slope in degrees
+    float slopeDeg = SampleSlopeDeg(HeightMapInput, u, v, splatHeightmapResolution, splatHeightMultiplier, splatChunkSizeWorld);
+    
+    // Calculate world position for noise (using 64-bit chunk coords)
+    uint2 chunkX64 = uint2(chunkXLo, chunkXHi);
+    uint2 chunkY64 = uint2(chunkYLo, chunkYHi);
+    uint baseVerts = (uint)max(1, baseVertsPerChunk);
+    
+    // Map splatmap UV to heightmap grid coordinates
+    uint mx = (uint)(u * (splatHeightmapResolution - 1));
+    uint mz = (uint)(v * (splatHeightmapResolution - 1));
+    
+    uint2 gx = AddU64_U32(MulU64_U32(chunkX64, baseVerts), mx);
+    uint2 gz = AddU64_U32(MulU64_U32(chunkY64, baseVerts), mz);
+    
+    // Noise for blending (matching CPU implementation)
+    float n = ValueNoise2D_Splatmap(gx, gz, splatBlendNoiseCellSize, splatmapSeed);
+    float hn = saturate(h01 + (n - 0.5) * splatBlendNoiseStrength);
+    
+    // Calculate weights for each layer
+    float beachW = SmoothBand_Splatmap(hn, splatWaterLevel, splatBeachLevel);
+    float grassW = SmoothBand_Splatmap(hn, splatBeachLevel, splatGrassLevel);
+    float rockW = SmoothBand_Splatmap(hn, splatGrassLevel, splatRockLevel);
+    float snowW = SmoothStep01_Splatmap(hn, splatRockLevel, splatSnowLevel);
+    
+    // Force rock on steep slopes
+    float slope01 = saturate((slopeDeg - splatSlopeRockStartDeg) / max(0.001, splatSlopeRockEndDeg - splatSlopeRockStartDeg));
+    rockW = max(rockW, slope01);
+    
+    // Normalize weights
+    float sum = beachW + grassW + rockW + snowW;
+    if (sum <= 1e-6) sum = 1.0;
+    beachW /= sum;
+    grassW /= sum;
+    rockW /= sum;
+    snowW /= sum;
+    
+    // Output: RGBA = beach/grass/rock/snow weights
+    SplatmapOutput[id.xy] = float4(beachW, grassW, rockW, snowW);
 }
 

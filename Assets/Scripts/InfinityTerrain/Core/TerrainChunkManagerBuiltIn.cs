@@ -681,10 +681,131 @@ namespace InfinityTerrain.Core
             int res = _splatmapResolution;
             td.alphamapResolution = res;
 
+            // Try GPU path first if compute shader is available
+            ComputeShader cs = _materialSettings?.terrainComputeShader;
+            if (cs != null)
+            {
+                int kernel = cs.FindKernel("GenerateSplatmap");
+                if (kernel >= 0)
+                {
+                    if (ApplyAutoSplatmapGPU(td, heights01, chunkX, chunkY, chunkSizeWorld, res, layers, cs, kernel))
+                    {
+                        return; // Success, exit early
+                    }
+                    // Fall back to CPU if GPU fails
+                    Debug.LogError("GPU splatmap generation failed, falling back to CPU");
+                }
+            }
+
+            // CPU fallback (original implementation)
+            ApplyAutoSplatmapCPU(td, heights01, chunkX, chunkY, chunkSizeWorld, res, layers);
+        }
+
+        private bool ApplyAutoSplatmapGPU(TerrainData td, float[,] heights01, long chunkX, long chunkY,
+            float chunkSizeWorld, int splatRes, int layers, ComputeShader cs, int kernel)
+        {
+            try
+            {
+                int hmRes = heights01.GetLength(0);
+
+                // Create heightmap texture from CPU data
+                RenderTexture heightMapRT = new RenderTexture(hmRes, hmRes, 0, RenderTextureFormat.RFloat);
+                heightMapRT.enableRandomWrite = false;
+                heightMapRT.Create();
+
+                // Upload heightmap data to GPU
+                Texture2D heightMapTex = new Texture2D(hmRes, hmRes, TextureFormat.RFloat, false);
+                for (int y = 0; y < hmRes; y++)
+                {
+                    for (int x = 0; x < hmRes; x++)
+                    {
+                        heightMapTex.SetPixel(x, y, new Color(heights01[y, x], 0, 0, 0));
+                    }
+                }
+                heightMapTex.Apply();
+                Graphics.Blit(heightMapTex, heightMapRT);
+
+                // Create output splatmap texture
+                RenderTexture splatmapRT = new RenderTexture(splatRes, splatRes, 0, RenderTextureFormat.ARGBFloat);
+                splatmapRT.enableRandomWrite = true;
+                splatmapRT.Create();
+
+                // Set compute shader parameters
+                cs.SetTexture(kernel, "HeightMapInput", heightMapRT);
+                cs.SetTexture(kernel, "SplatmapOutput", splatmapRT);
+
+                cs.SetFloat("splatWaterLevel", _materialSettings.waterLevel);
+                cs.SetFloat("splatBeachLevel", _materialSettings.beachLevel);
+                cs.SetFloat("splatGrassLevel", _materialSettings.grassLevel);
+                cs.SetFloat("splatRockLevel", _materialSettings.rockLevel);
+                cs.SetFloat("splatSnowLevel", _materialSettings.snowLevel);
+                cs.SetFloat("splatSlopeRockStartDeg", _slopeRockStartDeg);
+                cs.SetFloat("splatSlopeRockEndDeg", _slopeRockEndDeg);
+                cs.SetFloat("splatBlendNoiseCellSize", _blendNoiseCellSize);
+                cs.SetFloat("splatBlendNoiseStrength", _blendNoiseStrength);
+                cs.SetFloat("splatHeightMultiplier", _terrainSettings.heightMultiplier);
+                cs.SetFloat("splatChunkSizeWorld", chunkSizeWorld);
+                cs.SetInt("splatmapResolution", splatRes);
+                cs.SetInt("splatHeightmapResolution", hmRes);
+                cs.SetInt("splatmapSeed", _terrainSettings.seed ^ 0x3a12f9d);
+                cs.SetInt("baseVertsPerChunk", _terrainSettings.resolution - 1);
+
+                ComputeShaderHelper.SetLongAsUInt2(cs, "chunkXLo", "chunkXHi", chunkX);
+                ComputeShaderHelper.SetLongAsUInt2(cs, "chunkYLo", "chunkYHi", chunkY);
+
+                // Dispatch compute shader
+                int groups = Mathf.CeilToInt(splatRes / 8f);
+                cs.Dispatch(kernel, groups, groups, 1);
+
+                // Read back results
+                RenderTexture.active = splatmapRT;
+                Texture2D resultTex = new Texture2D(splatRes, splatRes, TextureFormat.RGBAFloat, false);
+                resultTex.ReadPixels(new Rect(0, 0, splatRes, splatRes), 0, 0);
+                resultTex.Apply();
+                RenderTexture.active = null;
+
+                // Convert to alphamap format
+                float[,,] alpha = new float[splatRes, splatRes, layers];
+                for (int y = 0; y < splatRes; y++)
+                {
+                    for (int x = 0; x < splatRes; x++)
+                    {
+                        Color c = resultTex.GetPixel(x, y);
+                        for (int l = 0; l < layers; l++)
+                        {
+                            float w = 0f;
+                            if (l == 0) w = c.r;      // beach
+                            else if (l == 1) w = c.g; // grass
+                            else if (l == 2) w = c.b; // rock
+                            else if (l == 3) w = c.a; // snow
+                            alpha[y, x, l] = w;
+                        }
+                    }
+                }
+
+                td.SetAlphamaps(0, 0, alpha);
+
+                // Cleanup
+                heightMapRT.Release();
+                splatmapRT.Release();
+                Object.DestroyImmediate(heightMapTex);
+                Object.DestroyImmediate(resultTex);
+
+                return true;
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"GPU splatmap generation failed, falling back to CPU: {e.Message}");
+                return false;
+            }
+        }
+
+        private void ApplyAutoSplatmapCPU(TerrainData td, float[,] heights01, long chunkX, long chunkY,
+            float chunkSizeWorld, int res, int layers)
+        {
             float[,,] alpha = new float[res, res, layers];
 
             int hmRes = heights01.GetLength(0);
-            float invHm = 1f / Mathf.Max(1, hmRes - 1);
 
             float water = _materialSettings.waterLevel;
             float beach = _materialSettings.beachLevel;

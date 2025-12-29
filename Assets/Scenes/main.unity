@@ -394,7 +394,6 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 953848056}
-  - component: {fileID: 953848055}
   - component: {fileID: 953848057}
   m_Layer: 0
   m_Name: infinityChunks
@@ -403,75 +402,6 @@ GameObject:
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!114 &953848055
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 953848054}
-  m_Enabled: 0
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: ff69095c502a39b48b9d4ed14b3f5522, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::InfinityRenderChunks
-  player: {fileID: 540458266}
-  chunkSize: 200
-  renderDistance: 10
-  seed: 8386
-  floatingOriginThreshold: 1000
-  current_x: 3455345435
-  current_y: 94589271034
-  _debugLocalPos: {x: 0, y: 0, z: 0}
-  autoPlacePlayerOnStart: 1
-  spawnHeightOffset: 5
-  enableSafety: 1
-  safetyHeightOffset: 2
-  groundCheckDistance: 0.5
-  hardVoidY: -500
-  recoverBelowTerrain: 5
-  resolution: 257
-  heightMultiplier: 1500
-  noiseScale: 0.005
-  octaves: 4
-  persistence: 0.5
-  lacunarity: 2
-  enableLod: 1
-  lodChunkRadii: 010000000200000004000000e7030000
-  lodResolutions: 81000000410000002100000011000000
-  skirtDepth: 0
-  enableFarSuperChunks: 1
-  superChunkScale: 3
-  superChunkStartRadius: 4
-  superChunksHaveCollider: 0
-  mountainStrength: 0.4
-  plainStrength: 0.3
-  erosionStrength: 0.2
-  domainWarpStrength: 2
-  waterLevel: 0.4
-  beachLevel: 0.42
-  grassLevel: 0.6
-  rockLevel: 0.75
-  snowLevel: 0.9
-  enableWaterTiles: 1
-  waterMaterialOverride: {fileID: 2100000, guid: 1eed8c0c756ddc74a9c71c5d204fd2de, type: 2}
-  waterMaterialResourceName: Ocean
-  waterRenderDistanceOverride: 0
-  waterEnableLod: 1
-  waterTileResolution: 33
-  waterLodChunkRadii: 010000000200000004000000e7030000
-  waterLodResolutions: 21000000110000000900000005000000
-  waterSurfaceY: 0
-  waterUseTerrainWaterLevel: 1
-  waterCastShadows: 0
-  waterReceiveShadows: 1
-  waterSurfaceYOffset: 0.02
-  enableVegetationScatter: 1
-  vegetationScatterSettings: {fileID: 11400000, guid: 54f823a81842f0345918e4386d77ecde, type: 2}
-  vegetationRenderDistance: 1
-  vegetationOnlyMaxLod: 0
-  terrainComputeShader: {fileID: 7200000, guid: f6a6999aa707b2e4bb27ac853c728da1, type: 3}
-  proceduralTerrainShader: {fileID: 4800000, guid: 3496a8c2308eae241a457749b5ec9a2a, type: 3}
 --- !u!4 &953848056
 Transform:
   m_ObjectHideFlags: 0
