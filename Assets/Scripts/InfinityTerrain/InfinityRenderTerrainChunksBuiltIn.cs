@@ -109,8 +109,6 @@ namespace InfinityTerrain
         [SerializeField] private bool enableTerrainDetails = true;
         [SerializeField] private int detailRenderDistance = 2;
         [SerializeField] private bool detailOnlyMaxLod = true;
-        [Tooltip("Limits how many chunks can generate detail layers per frame (prevents big stutters). 0 disables generation.")]
-        [SerializeField] private int detailGenerateBudgetPerFrame = 1;
 
         [Header("GPU Resources")]
         [Tooltip("REQUIRED: Assign TerrainGen.compute from Assets/Resources/Shaders/ folder directly in Inspector.")]
@@ -429,9 +427,6 @@ namespace InfinityTerrain
             if (vegetationScatterSettings == null) return;
             if (!vegetationUseDetailLayersForGrassPlants) return;
 
-            int budget = Mathf.Max(0, detailGenerateBudgetPerFrame);
-            int generated = 0;
-
             foreach (var kvp in _terrainChunkManager.LoadedChunks)
             {
                 var d = kvp.Value;
@@ -470,9 +465,8 @@ namespace InfinityTerrain
                     d.heights01 = heights01;
                 }
 
-                bool allow = generated < budget;
-                bool did = scatter.EnsureGenerated(d.noiseChunkX, d.noiseChunkY, d.lodResolution, d.chunkSizeWorld, heights01, allow);
-                if (did && allow) generated++;
+                // User-requested: no per-frame budget; generation is still cached per-chunk via EnsureGenerated.
+                scatter.EnsureGenerated(d.noiseChunkX, d.noiseChunkY, d.lodResolution, d.chunkSizeWorld, heights01, true);
             }
         }
 

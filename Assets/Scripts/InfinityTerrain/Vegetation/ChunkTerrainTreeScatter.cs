@@ -41,6 +41,7 @@ namespace InfinityTerrain.Vegetation
         }
 
         private static readonly Dictionary<GameObject, CachedBounds> _boundsCache = new Dictionary<GameObject, CachedBounds>();
+        private static readonly HashSet<int> _invalidTreePrefabWarned = new HashSet<int>();
 
         public void Clear()
         {
@@ -609,17 +610,110 @@ namespace InfinityTerrain.Vegetation
                 if (!unique.ContainsKey(id)) unique[id] = entries[i].prefab;
             }
 
-            TreePrototype[] protos = new TreePrototype[unique.Count];
-            int k = 0;
+            // Filter invalid prefabs (Unity Terrain trees require at least one valid mesh renderer; LODGroups must not contain missing renderer refs).
+            List<TreePrototype> protos = new List<TreePrototype>(unique.Count);
             foreach (var kvp in unique)
             {
-                protos[k++] = new TreePrototype
+                GameObject prefab = kvp.Value;
+                if (prefab == null) continue;
+
+                if (!IsValidTerrainTreePrefab(prefab, out string reason))
                 {
-                    prefab = kvp.Value,
+                    WarnInvalidTreePrefabOnce(prefab, reason);
+                    continue;
+                }
+
+                protos.Add(new TreePrototype
+                {
+                    prefab = prefab,
                     bendFactor = 0.5f
-                };
+                });
             }
-            return protos;
+
+            return protos.ToArray();
+        }
+
+        private static void WarnInvalidTreePrefabOnce(GameObject prefab, string reason)
+        {
+            if (prefab == null) return;
+            int id = prefab.GetInstanceID();
+            if (_invalidTreePrefabWarned.Contains(id)) return;
+            _invalidTreePrefabWarned.Add(id);
+            Debug.LogWarning($"[InfinityTerrain] Skipping Terrain tree prototype '{prefab.name}': {reason}");
+        }
+
+        private static bool IsValidTerrainTreePrefab(GameObject prefab, out string reason)
+        {
+            reason = null;
+            if (prefab == null) { reason = "Prefab is null."; return false; }
+
+            // If the prefab has an LODGroup, ensure it has no missing renderer references.
+            LODGroup lod = prefab.GetComponent<LODGroup>();
+            if (lod != null)
+            {
+                LOD[] lods;
+                try { lods = lod.GetLODs(); }
+                catch (Exception e) { reason = $"LODGroup threw while reading LODs ({e.GetType().Name})."; return false; }
+
+                if (lods == null || lods.Length == 0)
+                {
+                    reason = "LODGroup has no LODs.";
+                    return false;
+                }
+
+                for (int i = 0; i < lods.Length; i++)
+                {
+                    var rs = lods[i].renderers;
+                    if (rs == null || rs.Length == 0) continue;
+                    for (int r = 0; r < rs.Length; r++)
+                    {
+                        if (rs[r] == null)
+                        {
+                            reason = "LODGroup has a missing renderer reference (null).";
+                            return false;
+                        }
+                        try { _ = rs[r].sharedMaterial; }
+                        catch (MissingComponentException)
+                        {
+                            reason = "LODGroup references a missing Renderer component.";
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            // Unity Terrain tree prototypes require at least one valid mesh renderer.
+            bool hasMeshRenderer = false;
+
+            MeshRenderer[] mrs = prefab.GetComponentsInChildren<MeshRenderer>(true);
+            for (int i = 0; i < mrs.Length; i++)
+            {
+                if (mrs[i] == null) continue;
+                MeshFilter mf = mrs[i].GetComponent<MeshFilter>();
+                if (mf == null || mf.sharedMesh == null) continue;
+                hasMeshRenderer = true;
+                break;
+            }
+
+            if (!hasMeshRenderer)
+            {
+                SkinnedMeshRenderer[] smrs = prefab.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+                for (int i = 0; i < smrs.Length; i++)
+                {
+                    if (smrs[i] == null) continue;
+                    if (smrs[i].sharedMesh == null) continue;
+                    hasMeshRenderer = true;
+                    break;
+                }
+            }
+
+            if (!hasMeshRenderer)
+            {
+                reason = "Prefab contains no valid MeshRenderer+MeshFilter (or SkinnedMeshRenderer) with a mesh.";
+                return false;
+            }
+
+            return true;
         }
 
         private static int FindPrototypeIndex(TreePrototype[] prototypes, GameObject prefab)

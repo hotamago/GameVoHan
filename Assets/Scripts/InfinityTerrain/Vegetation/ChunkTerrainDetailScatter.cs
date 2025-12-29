@@ -5,8 +5,8 @@ using UnityEngine;
 namespace InfinityTerrain.Vegetation
 {
     /// <summary>
-    /// Spawns vegetation into Unity Terrain Detail Layers (fast grass-like rendering).
-    /// Intended for Built-in Terrain chunks (TerrainData.detailPrototypes + SetDetailLayer).
+    /// Fills Unity built-in Terrain detail layers (grass/foliage) on a Terrain chunk.
+    /// Designed for InfinityTerrain built-in Terrain streaming: deterministic per chunk coords + cached.
     /// </summary>
     [DisallowMultipleComponent]
     public class ChunkTerrainDetailScatter : MonoBehaviour
@@ -16,8 +16,11 @@ namespace InfinityTerrain.Vegetation
         [NonSerialized] public float heightMultiplier;
         [NonSerialized] public float waterSurfaceY;
 
-        public bool includePlants = true;
+        [Tooltip("Include VegetationCategory.Grass entries as Terrain detail layers.")]
         public bool includeGrass = true;
+
+        [Tooltip("Include VegetationCategory.Plant entries as Terrain detail layers.")]
+        public bool includePlants = true;
 
         private long _lastChunkX;
         private long _lastChunkY;
@@ -25,11 +28,7 @@ namespace InfinityTerrain.Vegetation
         private int _lastSeed;
         private int _lastSettingsHash;
 
-        private struct EntryRef
-        {
-            public VegetationPrefabEntry entry;
-            public int prototypeIndex;
-        }
+        private static readonly HashSet<int> _invalidDetailPrefabWarned = new HashSet<int>();
 
         public void Clear()
         {
@@ -37,24 +36,18 @@ namespace InfinityTerrain.Vegetation
             if (t == null || t.terrainData == null) return;
             TerrainData td = t.terrainData;
 
-            try
+            int res = td.detailResolution;
+            int layers = (td.detailPrototypes != null) ? td.detailPrototypes.Length : 0;
+            if (res > 0 && layers > 0)
             {
-                int res = td.detailResolution;
-                int layers = td.detailPrototypes != null ? td.detailPrototypes.Length : 0;
-                if (res > 0 && layers > 0)
+                int[,] empty = new int[res, res]; // [y,x]
+                for (int i = 0; i < layers; i++)
                 {
-                    int[,] zero = new int[res, res];
-                    for (int l = 0; l < layers; l++)
-                    {
-                        td.SetDetailLayer(0, 0, l, zero);
-                    }
+                    td.SetDetailLayer(0, 0, i, empty);
                 }
             }
-            catch
-            {
-                // Terrain detail APIs can throw if resolution/prototypes are not initialized; ignore.
-            }
 
+            t.Flush();
             _lastSeed = 0;
         }
 
@@ -78,6 +71,7 @@ namespace InfinityTerrain.Vegetation
                 _lastSettingsHash == settingsHash;
 
             if (same) return false;
+
             if (!allowGeneration)
             {
                 if (_lastChunkX != chunkX || _lastChunkY != chunkY) Clear();
@@ -90,223 +84,457 @@ namespace InfinityTerrain.Vegetation
             _lastSeed = seed;
             _lastSettingsHash = settingsHash;
 
-            Regenerate(terrain, seed, chunkX, chunkY, chunkSizeWorld, heights01);
+            Regenerate(terrain, chunkX, chunkY, seed, chunkSizeWorld, heights01);
             return true;
         }
 
-        private void Regenerate(Terrain terrain, int seed, long chunkX, long chunkY, float chunkSizeWorld, float[,] heights01)
+        private void Regenerate(Terrain terrain, long chunkX, long chunkY, int seed, float chunkSizeWorld, float[,] heights01)
         {
             TerrainData td = terrain.terrainData;
             if (td == null) return;
 
-            CollectEntries(settings, includeGrass, includePlants, out List<VegetationPrefabEntry> grass, out List<VegetationPrefabEntry> plants);
-            if (grass.Count == 0 && plants.Count == 0)
+            CollectDetailEntries(
+                settings,
+                includeGrass,
+                includePlants,
+                out List<VegetationPrefabEntry> uniqueEntries,
+                out List<int> grassProtoIdx,
+                out List<float> grassWeights,
+                out List<int> plantProtoIdx,
+                out List<float> plantWeights);
+
+            if (uniqueEntries.Count == 0 || (grassProtoIdx.Count == 0 && plantProtoIdx.Count == 0))
             {
                 Clear();
                 return;
             }
 
-            // Build unique detail prototypes (order: grass then plants)
-            List<EntryRef> grassRefs = new List<EntryRef>();
-            List<EntryRef> plantRefs = new List<EntryRef>();
-
-            DetailPrototype[] protos = BuildDetailPrototypes(grass, plants, grassRefs, plantRefs);
-            if (protos == null || protos.Length == 0)
-            {
-                Clear();
-                return;
-            }
-
-            td.detailPrototypes = protos;
-
-            int detailRes = Mathf.Clamp(settings.terrainDetailResolution, 32, 1024);
+            // Unity requires detailResolution to be a multiple of resolutionPerPatch.
             int perPatch = Mathf.Clamp(settings.terrainDetailResolutionPerPatch, 4, 64);
-            td.SetDetailResolution(detailRes, perPatch);
+            int desiredRes = Mathf.Clamp(settings.terrainDetailResolution, 32, 1024);
+            desiredRes = Mathf.Max(desiredRes, perPatch);
+            desiredRes = (desiredRes / perPatch) * perPatch;
+            if (desiredRes < perPatch) desiredRes = perPatch;
 
-            // Generate layers (intensity per cell)
-            float area = chunkSizeWorld * chunkSizeWorld;
-            float areaScale = area / (100f * 100f);
+            try
+            {
+                td.SetDetailResolution(desiredRes, perPatch);
+            }
+            catch
+            {
+                // Rare: Unity throws if it dislikes the combo. Fall back to a safe default.
+                td.SetDetailResolution(256, 16);
+            }
+
+            td.detailPrototypes = BuildDetailPrototypes(uniqueEntries);
+            
+            // Refresh prototypes to ensure Unity reloads detail assets (fixes "no spawn" issues)
+            try
+            {
+                td.RefreshPrototypes();
+            }
+            catch
+            {
+                // Unity version may not have RefreshPrototypes() method (pre-2021.2)
+            }
+
+            int res = td.detailResolution;
+            if (res <= 0)
+            {
+                Clear();
+                return;
+            }
+
+            int layerCount = td.detailPrototypes != null ? td.detailPrototypes.Length : 0;
+            if (layerCount <= 0)
+            {
+                Clear();
+                return;
+            }
+
+            var layers = new List<int[,]>(layerCount);
+            for (int i = 0; i < layerCount; i++)
+            {
+                layers.Add(new int[res, res]); // [y,x]
+            }
+
+            int heightRes = heights01.GetLength(0);
+            float heightStep = (heightRes > 1) ? (chunkSizeWorld / (heightRes - 1)) : chunkSizeWorld;
+
+            float chunkArea = chunkSizeWorld * chunkSizeWorld;
+            float cellArea = chunkArea / Mathf.Max(1, res * res);
+            float areaScale = chunkArea / (100f * 100f);
             if (areaScale < 0.01f) areaScale = 0.01f;
 
-            float grassDensity = settings.grassDensityPerM2 > 0f ? settings.grassDensityPerM2 : (Mathf.Max(0, settings.grassPerChunk) * areaScale) / Mathf.Max(0.0001f, area);
-            float plantDensity = settings.plantsDensityPerM2 > 0f ? settings.plantsDensityPerM2 : (Mathf.Max(0, settings.plantsPerChunk) * areaScale) / Mathf.Max(0.0001f, area);
+            float grassLambda = ComputeLambdaPerCell(
+                settings.grassDensityPerM2,
+                settings.grassPerChunk * areaScale,
+                settings.maxGrassPerChunk * areaScale,
+                chunkArea,
+                cellArea);
 
-            int grassCapTotal = Mathf.RoundToInt(settings.maxGrassPerChunk * areaScale);
-            int plantsCapTotal = Mathf.RoundToInt(settings.maxPlantsPerChunk * areaScale);
+            float plantsLambda = ComputeLambdaPerCell(
+                settings.plantsDensityPerM2,
+                settings.plantsPerChunk * areaScale,
+                settings.maxPlantsPerChunk * areaScale,
+                chunkArea,
+                cellArea);
 
-            // Pre-allocate all layers so we can SetDetailLayer once per layer.
-            int layers = protos.Length;
-            int[][,] maps = new int[layers][,];
-            for (int i = 0; i < layers; i++) maps[i] = new int[detailRes, detailRes];
+            int grassMaxPerCell = includeGrass ? Mathf.Clamp(settings.grassMaxPerCell, 0, 16) : 0;
+            int plantsMaxPerCell = includePlants ? Mathf.Clamp(settings.plantsMaxPerCell, 0, 16) : 0;
 
-            float cellSize = chunkSizeWorld / Mathf.Max(1, detailRes);
-            float cellArea = cellSize * cellSize;
+            float cellSize = chunkSizeWorld / res;
 
-            int grassSpawned = 0;
-            int plantsSpawned = 0;
-
-            int baseSeed = seed;
-
-            for (int y = 0; y < detailRes; y++)
+            for (int y = 0; y < res; y++)
             {
-                float z = (y + 0.5f) * cellSize;
-                for (int x = 0; x < detailRes; x++)
+                float localZ = (y + 0.5f) * cellSize;
+                for (int x = 0; x < res; x++)
                 {
-                    float xx = (x + 0.5f) * cellSize;
+                    float localX = (x + 0.5f) * cellSize;
 
-                    // Sample height/slope from heightmap
-                    float h01 = SampleHeight01Bilinear(heights01, xx, z, chunkSizeWorld);
-                    float hWorld = h01 * heightMultiplier;
-                    if (h01 < settings.minHeight01 || h01 > settings.maxHeight01) continue;
-                    if (hWorld < (waterSurfaceY + settings.waterExclusionYOffset)) continue;
-                    float slopeDeg = SampleSlopeDeg(heights01, xx, z, chunkSizeWorld, heightMultiplier);
-                    if (slopeDeg > settings.maxSlopeDeg) continue;
+                    if (!PassPlacementFilters(heights01, localX, localZ, heightStep, out _)) continue;
 
-                    uint cellHash = Hash2D(chunkX, chunkY, x, y, baseSeed);
-
-                    // Grass
-                    if (grassRefs.Count > 0 && grassDensity > 0f && grassSpawned < grassCapTotal)
+                    if (grassProtoIdx.Count > 0 && grassMaxPerCell > 0 && grassLambda > 0f)
                     {
-                        int maxPerCell = Mathf.Clamp(settings.grassMaxPerCell, 0, 16);
-                        int c = SampleCount(grassDensity, cellArea, maxPerCell, ref cellHash);
-                        for (int i = 0; i < c && grassSpawned < grassCapTotal; i++)
+                        float rCount = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ 0x13579BDF));
+                        int count = SampleCount(grassLambda, grassMaxPerCell, rCount);
+                        if (count > 0)
                         {
-                            int idx = PickWeightedIndex(grass, ref cellHash);
-                            int layerIndex = grassRefs[idx].prototypeIndex;
-                            maps[layerIndex][y, x] += 1;
-                            grassSpawned++;
+                            float rPick = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ 0x2468ACE0));
+                            int layer = PickWeightedIndex(rPick, grassProtoIdx, grassWeights);
+                            if ((uint)layer < (uint)layerCount) layers[layer][y, x] = count;
                         }
                     }
 
-                    // Plants
-                    if (plantRefs.Count > 0 && plantDensity > 0f && plantsSpawned < plantsCapTotal)
+                    if (plantProtoIdx.Count > 0 && plantsMaxPerCell > 0 && plantsLambda > 0f)
                     {
-                        int maxPerCell = Mathf.Clamp(settings.plantsMaxPerCell, 0, 16);
-                        int c = SampleCount(plantDensity, cellArea, maxPerCell, ref cellHash);
-                        for (int i = 0; i < c && plantsSpawned < plantsCapTotal; i++)
+                        float rCount = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ 0x66778899));
+                        int count = SampleCount(plantsLambda, plantsMaxPerCell, rCount);
+                        if (count > 0)
                         {
-                            int idx = PickWeightedIndex(plants, ref cellHash);
-                            int layerIndex = plantRefs[idx].prototypeIndex;
-                            maps[layerIndex][y, x] += 1;
-                            plantsSpawned++;
+                            float rPick = Hash01(HashCell(chunkX, chunkY, x, y, seed ^ unchecked((int)0x99AABBCC)));
+                            int layer = PickWeightedIndex(rPick, plantProtoIdx, plantWeights);
+                            if ((uint)layer < (uint)layerCount)
+                            {
+                                layers[layer][y, x] = Mathf.Max(layers[layer][y, x], count);
+                            }
                         }
                     }
                 }
             }
 
-            // Apply maps
-            for (int l = 0; l < layers; l++)
+            for (int i = 0; i < layerCount; i++)
             {
-                td.SetDetailLayer(0, 0, l, maps[l]);
+                td.SetDetailLayer(0, 0, i, layers[i]);
             }
 
             terrain.Flush();
         }
 
-        private static int SampleCount(float densityPerM2, float cellArea, int maxPerCell, ref uint state)
+        private bool PassPlacementFilters(float[,] heights01, float x, float z, float heightStep, out float h01)
         {
-            if (maxPerCell <= 0) return 0;
-            float expected = Mathf.Max(0f, densityPerM2) * Mathf.Max(0f, cellArea);
-            // Clamp expected to keep generation stable
-            expected = Mathf.Min(expected, maxPerCell);
-            int baseCount = Mathf.FloorToInt(expected);
-            float frac = expected - baseCount;
-            int c = baseCount;
-            if (c < maxPerCell && Next01(ref state) < frac) c++;
-            return Mathf.Clamp(c, 0, maxPerCell);
+            h01 = SampleHeight01Bilinear(heights01, x, z, heightStep);
+            float hWorld = h01 * heightMultiplier;
+
+            if (h01 < settings.minHeight01 || h01 > settings.maxHeight01) return false;
+            if (hWorld < (waterSurfaceY + settings.waterExclusionYOffset)) return false;
+
+            float slopeDeg = SampleSlopeDeg(heights01, x, z, heightStep, heightMultiplier);
+            if (slopeDeg > settings.maxSlopeDeg) return false;
+
+            return true;
         }
 
-        private static void CollectEntries(
-            VegetationScatterSettings settings,
+        private static void CollectDetailEntries(
+            VegetationScatterSettings s,
             bool includeGrass,
             bool includePlants,
-            out List<VegetationPrefabEntry> grass,
-            out List<VegetationPrefabEntry> plants)
+            out List<VegetationPrefabEntry> uniqueEntries,
+            out List<int> grassProtoIdx,
+            out List<float> grassWeights,
+            out List<int> plantProtoIdx,
+            out List<float> plantWeights)
         {
-            grass = new List<VegetationPrefabEntry>();
-            plants = new List<VegetationPrefabEntry>();
-            if (settings == null || settings.prefabs == null) return;
+            uniqueEntries = new List<VegetationPrefabEntry>();
+            grassProtoIdx = new List<int>();
+            grassWeights = new List<float>();
+            plantProtoIdx = new List<int>();
+            plantWeights = new List<float>();
 
-            for (int i = 0; i < settings.prefabs.Count; i++)
+            if (s == null || s.prefabs == null) return;
+
+            Dictionary<int, int> prefabIdToProto = new Dictionary<int, int>();
+
+            for (int i = 0; i < s.prefabs.Count; i++)
             {
-                var e = settings.prefabs[i];
+                VegetationPrefabEntry e = s.prefabs[i];
                 if (e.prefab == null || e.weight <= 0f) continue;
-                if (includeGrass && e.category == VegetationCategory.Grass) grass.Add(e);
-                if (includePlants && e.category == VegetationCategory.Plant) plants.Add(e);
+
+                bool isGrass = e.category == VegetationCategory.Grass;
+                bool isPlant = e.category == VegetationCategory.Plant || e.category == VegetationCategory.Other;
+
+                if (isGrass && !includeGrass) continue;
+                if (isPlant && !includePlants) continue;
+                if (!isGrass && !isPlant) continue;
+
+                // Terrain detail prototypes are stricter than trees; we validate and may use a child MeshRenderer if root is empty.
+                if (!TryGetValidDetailPrototype(e.prefab, out GameObject protoGo, out string reason))
+                {
+                    WarnInvalidDetailPrefabOnce(e.prefab, reason);
+                    continue;
+                }
+
+                // Replace the entry's prefab with the validated prototype GameObject (may be a child).
+                e.prefab = protoGo;
+
+                int protoId = e.prefab.GetInstanceID();
+                if (!prefabIdToProto.TryGetValue(protoId, out int protoIndex))
+                {
+                    protoIndex = uniqueEntries.Count;
+                    prefabIdToProto[protoId] = protoIndex;
+                    uniqueEntries.Add(e);
+                }
+
+                if (isGrass)
+                {
+                    grassProtoIdx.Add(protoIndex);
+                    grassWeights.Add(Mathf.Max(0f, e.weight));
+                }
+                else
+                {
+                    plantProtoIdx.Add(protoIndex);
+                    plantWeights.Add(Mathf.Max(0f, e.weight));
+                }
             }
         }
 
-        private static DetailPrototype[] BuildDetailPrototypes(
-            List<VegetationPrefabEntry> grassEntries,
-            List<VegetationPrefabEntry> plantEntries,
-            List<EntryRef> grassRefs,
-            List<EntryRef> plantRefs)
+        private static DetailPrototype[] BuildDetailPrototypes(List<VegetationPrefabEntry> entries)
         {
-            // Unique by prefab instance id
-            Dictionary<int, int> prefabToProto = new Dictionary<int, int>();
-            List<DetailPrototype> protos = new List<DetailPrototype>();
-
-            void add(List<VegetationPrefabEntry> list, List<EntryRef> refs)
+            DetailPrototype[] protos = new DetailPrototype[entries.Count];
+            for (int i = 0; i < entries.Count; i++)
             {
-                for (int i = 0; i < list.Count; i++)
+                VegetationPrefabEntry e = entries[i];
+
+                float minS = Mathf.Max(0.01f, e.minUniformScale);
+                float maxS = Mathf.Max(0.01f, e.maxUniformScale);
+                if (maxS < minS) { float t = minS; minS = maxS; maxS = t; }
+
+                // Enable GPU Instancing for proper material/shader rendering (fixes white/blank textures in URP)
+                // Unity 6 DetailPrototype supports useInstancing field
+                protos[i] = new DetailPrototype
                 {
-                    GameObject p = list[i].prefab;
-                    int id = p.GetInstanceID();
-                    if (!prefabToProto.TryGetValue(id, out int protoIndex))
+                    usePrototypeMesh = true,
+                    prototype = e.prefab,
+                    minWidth = minS,
+                    maxWidth = maxS,
+                    minHeight = minS,
+                    maxHeight = maxS,
+                    noiseSpread = 0.5f,
+                    healthyColor = Color.white,
+                    dryColor = Color.white,
+                    renderMode = (e.category == VegetationCategory.Grass) ? DetailRenderMode.Grass : DetailRenderMode.VertexLit
+                };
+
+                // Set useInstancing via reflection for Unity 6 compatibility (field/property exists in Unity 6+)
+                // Try as property first, then as field (Unity API may vary)
+                try
+                {
+                    var useInstancingProp = typeof(DetailPrototype).GetProperty("useInstancing");
+                    if (useInstancingProp != null && useInstancingProp.CanWrite)
                     {
-                        protoIndex = protos.Count;
-                        prefabToProto[id] = protoIndex;
-
-                        DetailPrototype dp = new DetailPrototype
-                        {
-                            prototype = p,
-                            renderMode = DetailRenderMode.VertexLit,
-                            usePrototypeMesh = true,
-                            healthyColor = new Color(0.85f, 0.95f, 0.85f),
-                            dryColor = new Color(0.75f, 0.75f, 0.65f),
-                            noiseSpread = 0.15f,
-                            minWidth = 0.8f,
-                            maxWidth = 1.4f,
-                            minHeight = 0.8f,
-                            maxHeight = 1.6f
-                        };
-
-                        protos.Add(dp);
+                        useInstancingProp.SetValue(protos[i], true, null);
                     }
+                    else
+                    {
+                        // Try as field if property doesn't exist
+                        var useInstancingField = typeof(DetailPrototype).GetField("useInstancing", 
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                        if (useInstancingField != null)
+                        {
+                            useInstancingField.SetValue(protos[i], true);
+                        }
+                    }
+                }
+                catch
+                {
+                    // Unity version doesn't support useInstancing (pre-6.0), fallback to non-instanced
+                }
 
-                    refs.Add(new EntryRef { entry = list[i], prototypeIndex = protoIndex });
+                // Ensure material on prefab has instancing enabled (required for GPU instanced details)
+                if (e.prefab != null)
+                {
+                    MeshRenderer mr = e.prefab.GetComponentInChildren<MeshRenderer>(true);
+                    if (mr != null && mr.sharedMaterial != null)
+                    {
+                        try
+                        {
+                            if (!mr.sharedMaterial.enableInstancing)
+                            {
+                                mr.sharedMaterial.enableInstancing = true;
+                            }
+                        }
+                        catch
+                        {
+                            // Material may not support instancing (e.g., legacy shader)
+                        }
+                    }
+                }
+            }
+            return protos;
+        }
+
+        private static void WarnInvalidDetailPrefabOnce(GameObject prefabRoot, string reason)
+        {
+            if (prefabRoot == null) return;
+            int id = prefabRoot.GetInstanceID();
+            if (_invalidDetailPrefabWarned.Contains(id)) return;
+            _invalidDetailPrefabWarned.Add(id);
+            Debug.LogWarning($"[InfinityTerrain] Skipping Terrain detail prototype '{prefabRoot.name}': {reason}");
+        }
+
+        private static bool TryGetValidDetailPrototype(GameObject prefabRoot, out GameObject prototypeGo, out string reason)
+        {
+            prototypeGo = null;
+            reason = null;
+            if (prefabRoot == null) { reason = "Prefab is null."; return false; }
+
+            // If LODGroup exists, ensure it doesn't reference missing renderers (avoids Editor TerrainTools MissingComponentException).
+            LODGroup lod = prefabRoot.GetComponent<LODGroup>();
+            if (lod != null)
+            {
+                LOD[] lods;
+                try { lods = lod.GetLODs(); }
+                catch (Exception e) { reason = $"LODGroup threw while reading LODs ({e.GetType().Name})."; return false; }
+
+                if (lods != null)
+                {
+                    for (int i = 0; i < lods.Length; i++)
+                    {
+                        var rs = lods[i].renderers;
+                        if (rs == null) continue;
+                        for (int r = 0; r < rs.Length; r++)
+                        {
+                            if (rs[r] == null)
+                            {
+                                reason = "LODGroup has a missing renderer reference (null).";
+                                return false;
+                            }
+                            try { _ = rs[r].sharedMaterial; }
+                            catch (MissingComponentException)
+                            {
+                                reason = "LODGroup references a missing Renderer component.";
+                                return false;
+                            }
+                        }
+                    }
                 }
             }
 
-            add(grassEntries, grassRefs);
-            add(plantEntries, plantRefs);
-
-            return protos.ToArray();
-        }
-
-        private static int PickWeightedIndex(List<VegetationPrefabEntry> entries, ref uint state)
-        {
-            if (entries == null || entries.Count == 0) return 0;
-            float total = 0f;
-            for (int i = 0; i < entries.Count; i++) total += Mathf.Max(0f, entries[i].weight);
-            if (total <= 0f) return 0;
-
-            float r = Next01(ref state) * total;
-            float acc = 0f;
-            for (int i = 0; i < entries.Count; i++)
+            // Candidate 1: root itself (preferred for Terrain details - Unity works best with root-level renderers)
+            if (IsValidDetailMeshObject(prefabRoot))
             {
-                acc += Mathf.Max(0f, entries[i].weight);
-                if (r <= acc) return i;
+                prototypeGo = prefabRoot;
+                return true;
             }
-            return entries.Count - 1;
+
+            // Candidate 2: any child with MeshRenderer+MeshFilter+mesh+material
+            // Note: Using child renderers can cause issues with Terrain details, but we allow it as fallback
+            MeshRenderer[] mrs = prefabRoot.GetComponentsInChildren<MeshRenderer>(true);
+            for (int i = 0; i < mrs.Length; i++)
+            {
+                if (mrs[i] == null) continue;
+                GameObject go = mrs[i].gameObject;
+                if (go == null) continue;
+                if (IsValidDetailMeshObject(go))
+                {
+                    prototypeGo = go;
+                    // Warn once that we're using a child renderer (not ideal for Terrain details)
+                    WarnInvalidDetailPrefabOnce(prefabRoot, 
+                        $"Using child GameObject '{go.name}' as detail mesh (root has no MeshRenderer). " +
+                        "For best results, ensure the prefab root has MeshRenderer+MeshFilter.");
+                    return true;
+                }
+            }
+
+            reason = "No valid MeshRenderer+MeshFilter with a mesh+material found (Terrain details require a valid mesh renderer).";
+            return false;
         }
 
-        private static float SampleHeight01Bilinear(float[,] h, float x, float z, float chunkSizeWorld)
+        private static bool IsValidDetailMeshObject(GameObject go)
+        {
+            if (go == null) return false;
+            MeshRenderer mr = go.GetComponent<MeshRenderer>();
+            MeshFilter mf = go.GetComponent<MeshFilter>();
+            if (mr == null || mf == null) return false;
+            if (mf.sharedMesh == null) return false;
+            try
+            {
+                // Accessing sharedMaterial can throw MissingComponentException if the renderer ref is broken.
+                if (mr.sharedMaterial == null) return false;
+            }
+            catch (MissingComponentException)
+            {
+                return false;
+            }
+            return true;
+        }
+
+        private static float ComputeLambdaPerCell(float densityPerM2, float perChunkTarget, float perChunkCap, float chunkArea, float cellArea)
+        {
+            if (chunkArea <= 0.0001f || cellArea <= 0.0001f) return 0f;
+
+            float total;
+            if (densityPerM2 > 0f)
+            {
+                total = densityPerM2 * chunkArea;
+                if (perChunkCap > 0f) total = Mathf.Min(total, perChunkCap);
+            }
+            else
+            {
+                total = Mathf.Max(0f, perChunkTarget);
+                if (perChunkCap > 0f) total = Mathf.Min(total, perChunkCap);
+            }
+
+            float effectiveDensity = total / chunkArea;
+            return effectiveDensity * cellArea;
+        }
+
+        private static int SampleCount(float lambda, int maxPerCell, float r01)
+        {
+            if (maxPerCell <= 0) return 0;
+            if (lambda <= 0f) return 0;
+            if (lambda >= maxPerCell) return maxPerCell;
+
+            int baseCount = Mathf.FloorToInt(lambda);
+            float frac = lambda - baseCount;
+            int c = baseCount + ((r01 < frac) ? 1 : 0);
+            if (c > maxPerCell) c = maxPerCell;
+            if (c < 0) c = 0;
+            return c;
+        }
+
+        private static int PickWeightedIndex(float r01, List<int> indices, List<float> weights)
+        {
+            if (indices == null || weights == null || indices.Count == 0) return -1;
+            float total = 0f;
+            for (int i = 0; i < indices.Count; i++) total += Mathf.Max(0f, weights[i]);
+            if (total <= 0f) return indices[0];
+
+            float r = Mathf.Clamp01(r01) * total;
+            float acc = 0f;
+            for (int i = 0; i < indices.Count; i++)
+            {
+                acc += Mathf.Max(0f, weights[i]);
+                if (r <= acc) return indices[i];
+            }
+            return indices[indices.Count - 1];
+        }
+
+        private static float SampleHeight01Bilinear(float[,] h, float x, float z, float step)
         {
             int res = h.GetLength(0);
             if (res <= 1) return Mathf.Clamp01(h[0, 0]);
 
-            float step = chunkSizeWorld / Mathf.Max(1, res - 1);
             float fx = Mathf.Clamp(x / Mathf.Max(0.0001f, step), 0f, res - 1.001f);
             float fz = Mathf.Clamp(z / Mathf.Max(0.0001f, step), 0f, res - 1.001f);
 
@@ -326,12 +554,11 @@ namespace InfinityTerrain.Vegetation
             return Mathf.Clamp01(Mathf.Lerp(Mathf.Lerp(a, b, tx), Mathf.Lerp(c, d, tx), tz));
         }
 
-        private static float SampleSlopeDeg(float[,] h, float x, float z, float chunkSizeWorld, float heightMultiplier)
+        private static float SampleSlopeDeg(float[,] h, float x, float z, float step, float heightMultiplier)
         {
             int res = h.GetLength(0);
             if (res <= 2) return 0f;
 
-            float step = chunkSizeWorld / Mathf.Max(1, res - 1);
             int ix = Mathf.Clamp(Mathf.RoundToInt(x / Mathf.Max(0.0001f, step)), 1, res - 2);
             int iz = Mathf.Clamp(Mathf.RoundToInt(z / Mathf.Max(0.0001f, step)), 1, res - 2);
 
@@ -371,39 +598,83 @@ namespace InfinityTerrain.Vegetation
                 h = (h * 31) ^ (s != null ? s.GetInstanceID() : 0);
                 h = (h * 31) ^ includeGrass.GetHashCode();
                 h = (h * 31) ^ includePlants.GetHashCode();
+                if (s == null) return h;
+
+                h = (h * 31) ^ s.seedOffset;
+                h = (h * 31) ^ Mathf.RoundToInt(s.minHeight01 * 10000f);
+                h = (h * 31) ^ Mathf.RoundToInt(s.maxHeight01 * 10000f);
+                h = (h * 31) ^ Mathf.RoundToInt(s.maxSlopeDeg * 100f);
+                h = (h * 31) ^ Mathf.RoundToInt(s.waterExclusionYOffset * 100f);
+                h = (h * 31) ^ s.terrainDetailResolution;
+                h = (h * 31) ^ s.terrainDetailResolutionPerPatch;
+                h = (h * 31) ^ s.grassMaxPerCell;
+                h = (h * 31) ^ s.plantsMaxPerCell;
+                h = (h * 31) ^ s.plantsPerChunk;
+                h = (h * 31) ^ s.grassPerChunk;
+                h = (h * 31) ^ Mathf.RoundToInt(s.plantsDensityPerM2 * 10000f);
+                h = (h * 31) ^ Mathf.RoundToInt(s.grassDensityPerM2 * 10000f);
+                h = (h * 31) ^ s.maxPlantsPerChunk;
+                h = (h * 31) ^ s.maxGrassPerChunk;
+
+                if (s.prefabs != null)
+                {
+                    int count = Mathf.Min(128, s.prefabs.Count);
+                    for (int i = 0; i < count; i++)
+                    {
+                        var e = s.prefabs[i];
+                        if (e.prefab == null) continue;
+                        bool isGrass = e.category == VegetationCategory.Grass;
+                        bool isPlant = e.category == VegetationCategory.Plant || e.category == VegetationCategory.Other;
+                        if (!isGrass && !isPlant) continue;
+                        if (isGrass && !includeGrass) continue;
+                        if (isPlant && !includePlants) continue;
+                        h = (h * 31) ^ e.prefab.GetInstanceID();
+                        h = (h * 31) ^ (int)e.category;
+                        h = (h * 31) ^ Mathf.RoundToInt(e.weight * 1000f);
+                        h = (h * 31) ^ Mathf.RoundToInt(e.minUniformScale * 1000f);
+                        h = (h * 31) ^ Mathf.RoundToInt(e.maxUniformScale * 1000f);
+                        h = (h * 31) ^ e.alignToNormal.GetHashCode();
+                        h = (h * 31) ^ e.randomYaw.GetHashCode();
+                        h = (h * 31) ^ Mathf.RoundToInt(e.yOffset * 1000f);
+                    }
+                }
+
                 return h;
             }
         }
 
-        private static uint Hash2D(long chunkX, long chunkY, int x, int y, int seed)
+        private static uint HashCell(long chunkX, long chunkY, int x, int y, int salt)
         {
             unchecked
             {
-                uint h = Hash32((uint)seed ^ 0x9e3779b9u);
+                uint h = 0x811C9DC5u;
                 h = Hash32(h ^ (uint)chunkX);
                 h = Hash32(h ^ (uint)(chunkX >> 32));
                 h = Hash32(h ^ (uint)chunkY);
                 h = Hash32(h ^ (uint)(chunkY >> 32));
                 h = Hash32(h ^ (uint)x);
                 h = Hash32(h ^ (uint)y);
+                h = Hash32(h ^ (uint)salt);
                 return h;
             }
         }
 
-        private static uint Hash32(uint v)
+        private static uint Hash32(uint x)
         {
-            v ^= v >> 16;
-            v *= 0x7feb352d;
-            v ^= v >> 15;
-            v *= 0x846ca68b;
-            v ^= v >> 16;
-            return v;
+            unchecked
+            {
+                x ^= x >> 16;
+                x *= 0x7feb352d;
+                x ^= x >> 15;
+                x *= 0x846ca68b;
+                x ^= x >> 16;
+                return x;
+            }
         }
 
-        private static float Next01(ref uint state)
+        private static float Hash01(uint h)
         {
-            state = Hash32(state + 0x9e3779b9u);
-            return (state & 0x00FFFFFFu) / 16777216.0f;
+            return (h & 0x00FFFFFFu) / 16777216.0f;
         }
     }
 }

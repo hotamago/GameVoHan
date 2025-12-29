@@ -21,13 +21,13 @@ MonoBehaviour:
   rocksPerChunk: 5
   plantsPerChunk: 20
   grassPerChunk: 100
-  plantsDensityPerM2: 0.12
-  grassDensityPerM2: 0.52
+  plantsDensityPerM2: 0.15
+  grassDensityPerM2: 0.66
   maxPlantsPerChunk: 2500
   maxGrassPerChunk: 6000
   terrainDetailResolution: 256
   terrainDetailResolutionPerPatch: 16
-  grassMaxPerCell: 4
+  grassMaxPerCell: 3
   plantsMaxPerCell: 2
   treeMinSpacing: 2
   rockMinSpacing: 5
@@ -35,10 +35,10 @@ MonoBehaviour:
   grassMinSpacing: 0.1
   attemptsPerSpawn: 5
   enableTreeClustering: 1
-  treeClusterCellSize: 35
-  treeClusterThreshold: 0.7
+  treeClusterCellSize: 50.99
+  treeClusterThreshold: 0.62
   treeClusterSharpness: 2.42
-  createColliderProxies: 0
+  createColliderProxies: 1
   autoGenerateColliderWhenMissing: 1
   prefabs:
   - name: BlossomTree_01
