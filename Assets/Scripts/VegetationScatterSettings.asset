@@ -445,51 +445,6 @@ MonoBehaviour:
     alignToNormal: 1
     randomYaw: 1
     yOffset: 0
-  - name: Fir_01
-    category: 0
-    prefab: {fileID: 3519991192614501125, guid: 4aa7a928cc83c7d49819fe52f53ec261, type: 3}
-    weight: 1
-    minUniformScale: 0.9
-    maxUniformScale: 1.2
-    alignToNormal: 0
-    randomYaw: 1
-    yOffset: 0
-  - name: Fir_02
-    category: 0
-    prefab: {fileID: 1502869466188940898, guid: 77e842542dc470c4cacb99376e9140d7, type: 3}
-    weight: 1
-    minUniformScale: 0.9
-    maxUniformScale: 1.2
-    alignToNormal: 0
-    randomYaw: 1
-    yOffset: 0
-  - name: Fir_03
-    category: 0
-    prefab: {fileID: 3656882167978128256, guid: a5e5ef299cff96b43a90c8cfe59e376b, type: 3}
-    weight: 1
-    minUniformScale: 0.9
-    maxUniformScale: 1.2
-    alignToNormal: 0
-    randomYaw: 1
-    yOffset: 0
-  - name: Fir_04
-    category: 0
-    prefab: {fileID: 7811622897032540034, guid: 9ee7cbf1161c07f43b5e74f14c2cd00a, type: 3}
-    weight: 1
-    minUniformScale: 0.9
-    maxUniformScale: 1.2
-    alignToNormal: 0
-    randomYaw: 1
-    yOffset: 0
-  - name: Fir_05
-    category: 0
-    prefab: {fileID: 3189538578139757832, guid: ea4b22d3800ce0b46b7304dfd8f7ac78, type: 3}
-    weight: 1
-    minUniformScale: 0.9
-    maxUniformScale: 1.2
-    alignToNormal: 0
-    randomYaw: 1
-    yOffset: 0
   - name: Flower_Blue_01
     category: 2
     prefab: {fileID: 7733339445370539976, guid: eae282ced33b74140b668fb902af6d44, type: 3}

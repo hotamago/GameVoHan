@@ -303,7 +303,7 @@ MonoBehaviour:
   domainWarpStrength: 2
   enableWaterTiles: 1
   waterMaterialOverride: {fileID: 2100000, guid: 8759ec410a6774b4ea13ae32dc2b8d2e, type: 2}
-  waterMaterialResourceName: Ocean
+  waterMaterialResourceName: Water_mat_02
   waterRenderDistanceOverride: 0
   waterEnableLod: 1
   waterTileResolution: 65
@@ -318,13 +318,13 @@ MonoBehaviour:
   terrainBasemapDistance: 1000
   terrainDrawInstanced: 1
   terrainGroupingID: 0
-  defaultTerrainLayer: {fileID: 8574412962073106934, guid: adb6478a7f24de14eb356d6dc3d0c502, type: 2}
+  defaultTerrainLayer: {fileID: 8574412962073106934, guid: acd1f91ae4732f140ab38f18ebfaa16c, type: 2}
   defaultTerrainDiffuse: {fileID: 2800000, guid: 5972a508052895642916717940a75fd0, type: 3}
   terrainLayersOverride:
   - {fileID: 8574412962073106934, guid: b447b7c760c116c43901f9ede86896f5, type: 2}
-  - {fileID: 8574412962073106934, guid: adb6478a7f24de14eb356d6dc3d0c502, type: 2}
+  - {fileID: 8574412962073106934, guid: acd1f91ae4732f140ab38f18ebfaa16c, type: 2}
   - {fileID: 8574412962073106934, guid: 410ebf160a46ed84083e2077ca8fc3d0, type: 2}
-  - {fileID: 8574412962073106934, guid: ca948470117be2143a600fa882a2b77a, type: 2}
+  - {fileID: 8574412962073106934, guid: 32dc116de43ded84a8befc20d798b99e, type: 2}
   enableAutoSplatmap: 1
   splatmapResolution: 128
   slopeRockStartDeg: 30
@@ -369,37 +369,6 @@ MonoBehaviour:
   vegetationGenerateBudgetPerFrame: 1
   detailGenerateBudgetPerFrame: 1
   vfxGenerateBudgetPerFrame: 2
---- !u!1 &1757818043
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1757818045}
-  m_Layer: 0
-  m_Name: Cloud
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1757818045
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1757818043}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: -0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2129749443
 GameObject:
   m_ObjectHideFlags: 0
@@ -621,4 +590,3 @@ SceneRoots:
   - {fileID: 953848056}
   - {fileID: 82092331}
   - {fileID: 373702677}
-  - {fileID: 1757818045}
