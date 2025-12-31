@@ -150,10 +150,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::PerformanceDisplay
   showFPS: 1
   showLatency: 1
+  showCurrentChunk: 1
+  showPlayerPosition: 1
   fontSize: 24
   textColor: {r: 1, g: 1, b: 1, a: 1}
   position: {x: 10, y: 10}
   updateInterval: 0.5
+  player: {fileID: 0}
 --- !u!4 &82092331
 Transform:
   m_ObjectHideFlags: 0
@@ -366,6 +369,37 @@ MonoBehaviour:
   vegetationGenerateBudgetPerFrame: 1
   detailGenerateBudgetPerFrame: 1
   vfxGenerateBudgetPerFrame: 2
+--- !u!1 &1757818043
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1757818045}
+  m_Layer: 0
+  m_Name: Cloud
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1757818045
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1757818043}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: -0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &2129749443
 GameObject:
   m_ObjectHideFlags: 0
@@ -562,6 +596,10 @@ PrefabInstance:
       value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 4091376553488565417, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
+      propertyPath: field of view
+      value: 102
+      objectReference: {fileID: 0}
+    - target: {fileID: 4091376553488565417, guid: 2dce7e4d569c0a84bbc589064011dcc7, type: 3}
       propertyPath: far clip plane
       value: 1000
       objectReference: {fileID: 0}
@@ -583,3 +621,4 @@ SceneRoots:
   - {fileID: 953848056}
   - {fileID: 82092331}
   - {fileID: 373702677}
+  - {fileID: 1757818045}
