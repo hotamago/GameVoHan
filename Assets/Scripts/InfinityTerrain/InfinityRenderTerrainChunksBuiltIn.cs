@@ -81,6 +81,8 @@ namespace InfinityTerrain
         [SerializeField] private float terrainHeightmapPixelError = 5f;
         [SerializeField] private float terrainBasemapDistance = 1000f;
         [SerializeField] private bool terrainDrawInstanced = true;
+        [SerializeField] private Material terrainMaterialOverride;
+        [SerializeField] private Shader terrainShaderOverride;
         [SerializeField] private int terrainGroupingID = 0;
         [Tooltip("If null, a runtime TerrainLayer will be created (simple gray) so URP Terrain is not invisible.")]
         [SerializeField] private TerrainLayer defaultTerrainLayer;
@@ -359,16 +361,21 @@ namespace InfinityTerrain
             defaultTerrainLayer.tileOffset = Vector2.zero;
         }
 
-        private static Material TryCreateTerrainMaterialTemplate()
+        private Material TryCreateTerrainMaterialTemplate()
         {
+            if (terrainMaterialOverride != null) return terrainMaterialOverride;
+            if (terrainShaderOverride != null) return new Material(terrainShaderOverride);
+
             // URP project: prefer URP Terrain/Lit.
             Shader s =
                 Shader.Find("Universal Render Pipeline/Terrain/Lit") ??
                 Shader.Find("Universal Render Pipeline/Nature/Terrain/Lit") ??
                 Shader.Find("Nature/Terrain/Standard");
 
-            if (s == null) return null;
-            return new Material(s);
+            if (s != null) return new Material(s);
+            Material m = new Material(Shader.Find("Standard"));
+            m.color = new Color(0.4f, 0.6f, 0.4f);
+            return m;
         }
 
         private float ComputeWaterSurfaceY()
